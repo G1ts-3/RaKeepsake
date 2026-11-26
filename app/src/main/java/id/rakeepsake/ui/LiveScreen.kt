@@ -297,7 +297,7 @@ fun LiveScreen(
                             SectionLabel("SEDANG LIVE (${liveOrRecList.size})", Modifier.padding(horizontal = 0.dp, vertical = 2.dp))
                         }
                         items(liveOrRecList, key = { "live_${it.id}" }, contentType = { "hero" }) { account ->
-                            LiveHeroCard(account, tick, settings.autoRecord)
+                            LiveHeroCard(account, tick, settings.autoRecord) { container.syncAvatarsAsync(setOf(account.id)) }
                         }
                     }
 
@@ -309,7 +309,7 @@ fun LiveScreen(
                             )
                         }
                         items(offlineList, key = { "off_${it.id}" }, contentType = { "offline" }) { account ->
-                            OfflineRowCard(account)
+                            OfflineRowCard(account) { container.syncAvatarsAsync(setOf(account.id)) }
                         }
                     }
                 }
@@ -319,7 +319,12 @@ fun LiveScreen(
 }
 
 @Composable
-private fun LiveHeroCard(account: Account, tick: Long, globalAutoRecord: Boolean = true) {
+private fun LiveHeroCard(
+    account: Account,
+    tick: Long,
+    globalAutoRecord: Boolean = true,
+    onAvatarError: () -> Unit = {},
+) {
     val context = LocalContext.current
     val rec = LiveStateHolder.recording[account.id]
     val live = LiveStateHolder.liveNow[account.id]
@@ -336,7 +341,7 @@ private fun LiveHeroCard(account: Account, tick: Long, globalAutoRecord: Boolean
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                LiveRingAvatar(account = account, size = 56.dp, isLive = true)
+                LiveRingAvatar(account = account, size = 56.dp, isLive = true, onAvatarError = onAvatarError)
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(
@@ -489,7 +494,7 @@ private fun LiveHeroCard(account: Account, tick: Long, globalAutoRecord: Boolean
 
 /** Baris akun pantauan offline: menampilkan info status pemantauan tanpa tombol rekam. */
 @Composable
-private fun OfflineRowCard(account: Account) {
+private fun OfflineRowCard(account: Account, onAvatarError: () -> Unit = {}) {
     val lastLiveText = remember(account.lastLiveAt) {
         Humanizer.formatRelativeLastLive(account.lastLiveAt)
     }
@@ -513,7 +518,7 @@ private fun OfflineRowCard(account: Account) {
             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            LiveRingAvatar(account = account, size = 48.dp, isLive = false)
+            LiveRingAvatar(account = account, size = 48.dp, isLive = false, onAvatarError = onAvatarError)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(

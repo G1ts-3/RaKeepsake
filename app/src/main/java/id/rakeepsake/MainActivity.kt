@@ -45,31 +45,9 @@ class MainActivity : ComponentActivity() {
         schedulePostWatch()
         resumeMonitorIfWanted()
         scope.launch(Dispatchers.IO) {
-            try {
-                // Tunda sinkronisasi avatar jaringan agar frame pertama saat startup tetap 60 fps mulus
-                delay(1800L)
-                val accounts = container.db.accounts().allOnce()
-                for (acc in accounts) {
-                    if (acc.avatarUrl.isNullOrBlank()) {
-                        try {
-                            val avatar = when (acc.platform) {
-                                "TIKTOK" -> id.rakeepsake.net.PlatformApi.tiktokCheck(acc.handle).avatarUrl
-                                "SHOWROOM" -> id.rakeepsake.net.PlatformApi.showroomCheck(acc.handle).avatarUrl
-                                "IDN" -> id.rakeepsake.net.PlatformApi.idnCheck(acc.handle).avatarUrl
-                                else -> null
-                            }
-                            if (!avatar.isNullOrBlank()) {
-                                container.db.accounts().setAvatarUrl(acc.id, avatar)
-                                android.util.Log.i("MainActivity", "Avatar diperbarui untuk @${acc.handle}: $avatar")
-                            }
-                        } catch (t: Throwable) {
-                            android.util.Log.w("MainActivity", "Gagal ambil avatar @${acc.handle}: ${t.message}")
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                android.util.Log.w("MainActivity", "Sinkronisasi avatar gagal: ${e.message}")
-            }
+            // Tunda sinkronisasi avatar jaringan agar frame pertama saat startup tetap 60 fps mulus
+            delay(1800L)
+            container.syncAvatarsInternal()
         }
         scope.launch(Dispatchers.IO) {
             delay(3500L)

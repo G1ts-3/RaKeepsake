@@ -22,11 +22,13 @@ import androidx.room.Update
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import id.rakeepsake.net.AppUpdater
+import id.rakeepsake.net.PlatformApi
 import id.rakeepsake.util.Storage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,6 +38,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentHashMap
 
 enum class Platform(val label: String, val hint: String) {
     TIKTOK("TikTok", "username (mis. johndoe)"),
@@ -138,7 +143,7 @@ interface AccountDao {
     @Query("DELETE FROM accounts WHERE platform = :platform AND handle = :handle")
     suspend fun deleteByPlatformAndHandle(platform: String, handle: String)
 
-    @Query("SELECT * FROM accounts WHERE platform = :platform AND handle = :handle LIMIT 1")
+    @Query("SELECT * FROM accounts WHERE platform = :platform AND LOWER(handle) = LOWER(:handle) LIMIT 1")
     suspend fun byPlatformAndHandle(platform: String, handle: String): Account?
 
     @Query("UPDATE accounts SET recordLive = :recordLive, watchPosts = :watchPosts, notifyOnly = :notifyOnly WHERE handle = :handle")
@@ -270,6 +275,8 @@ class AppContainer(context: Context) {
     val totalBytes: StateFlow<Long> = _totalBytes.asStateFlow()
 
     private val refreshRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    private val avatarSyncMutex = Mutex()
+    private val avatarCooldownAt = ConcurrentHashMap<Long, Long>()
 
     init {
         ioScope.launch {
@@ -296,6 +303,45 @@ class AppContainer(context: Context) {
 
     fun refreshLibrary() {
         ioScope.launch { reloadLibraryNow() }
+    }
+
+    /** Memicu penyegaran avatar akun yang kosong atau token URL CDN-nya kedaluwarsa di latar belakang. */
+    fun syncAvatarsAsync(forceAccountIds: Set<Long> = emptySet()) {
+        ioScope.launch { syncAvatarsInternal(forceAccountIds) }
+    }
+
+    suspend fun syncAvatarsInternal(forceAccountIds: Set<Long> = emptySet()) {
+        avatarSyncMutex.withLock {
+            runCatching {
+                val nowMs = System.currentTimeMillis()
+                val nowSec = nowMs / 1000L
+                val accounts = db.accounts().allOnce()
+                var fetched = 0
+                for (acc in accounts) {
+                    val forced = acc.id in forceAccountIds
+                    val stale = PlatformApi.isAvatarUrlExpiredOrBlank(acc.avatarUrl, nowSec)
+                    if (!forced && !stale) continue
+                    val lastAttempt = avatarCooldownAt[acc.id] ?: 0L
+                    if (nowMs - lastAttempt < 10 * 60_000L) continue
+                    avatarCooldownAt[acc.id] = nowMs
+
+                    runCatching {
+                        PlatformApi.fetchAccountAvatar(acc.platform, acc.handle)
+                    }.onSuccess { freshAvatar ->
+                        if (!freshAvatar.isNullOrBlank() && freshAvatar != acc.avatarUrl) {
+                            db.accounts().setAvatarUrl(acc.id, freshAvatar)
+                            android.util.Log.i("AppContainer", "Avatar diperbarui untuk @${acc.handle}")
+                        }
+                    }.onFailure { t ->
+                        android.util.Log.w("AppContainer", "Gagal ambil avatar @${acc.handle}: ${t.message}")
+                    }
+                    fetched++
+                    if (fetched > 0) delay(150L)
+                }
+            }.onFailure { e ->
+                android.util.Log.w("AppContainer", "Sinkronisasi avatar gagal: ${e.message}")
+            }
+        }
     }
 
     private fun reloadLibraryNow() {

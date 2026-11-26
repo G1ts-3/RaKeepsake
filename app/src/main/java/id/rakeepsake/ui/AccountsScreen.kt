@@ -76,6 +76,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -130,6 +131,11 @@ fun AccountsScreen(container: AppContainer, modifier: Modifier) {
 
     val bulkMode = remember { mutableStateOf(false) }
     val selectedIds = remember { mutableStateListOf<Long>() }
+    LaunchedEffect(accounts.size) {
+        if (accounts.any { PlatformApi.isAvatarUrlExpiredOrBlank(it.avatarUrl) }) {
+            container.syncAvatarsAsync()
+        }
+    }
     if (bulkMode.value) {
         BackHandler {
             bulkMode.value = false
@@ -397,6 +403,7 @@ fun AccountsScreen(container: AppContainer, modifier: Modifier) {
                                     if (selectedIds.contains(id)) selectedIds.remove(id) else selectedIds.add(id)
                                 },
                                 onOpenDetail = { acc -> detailAccount = acc },
+                                onAvatarError = { acc -> container.syncAvatarsAsync(setOf(acc.id)) },
                             )
                         }
                     }
@@ -419,6 +426,7 @@ fun AccountsScreen(container: AppContainer, modifier: Modifier) {
                                     if (selectedIds.contains(id)) selectedIds.remove(id) else selectedIds.add(id)
                                 },
                                 onOpenDetail = { acc -> detailAccount = acc },
+                                onAvatarError = { acc -> container.syncAvatarsAsync(setOf(acc.id)) },
                             )
                         }
                     }
@@ -436,6 +444,7 @@ fun AccountsScreen(container: AppContainer, modifier: Modifier) {
                                     detailAccount = account
                                 }
                             },
+                            onAvatarError = { container.syncAvatarsAsync(setOf(account.id)) },
                         )
                     }
                 }
@@ -547,6 +556,7 @@ private fun OshiGroupBlock(
     selectedIds: List<Long>,
     onToggleSelect: (Long) -> Unit,
     onOpenDetail: (Account) -> Unit,
+    onAvatarError: (Account) -> Unit = {},
 ) {
     if (group.accounts.size == 1) {
         val acc = group.accounts.first()
@@ -555,6 +565,7 @@ private fun OshiGroupBlock(
             bulkMode = bulkMode,
             selected = selectedIds.contains(acc.id),
             onClick = { if (bulkMode) onToggleSelect(acc.id) else onOpenDetail(acc) },
+            onAvatarError = { onAvatarError(acc) },
         )
         return
     }
@@ -617,6 +628,7 @@ private fun OshiGroupBlock(
                     bulkMode = bulkMode,
                     selected = selectedIds.contains(acc.id),
                     onClick = { if (bulkMode) onToggleSelect(acc.id) else onOpenDetail(acc) },
+                    onAvatarError = { onAvatarError(acc) },
                 )
             }
         }
@@ -633,6 +645,7 @@ private fun OshiCompactRow(
     bulkMode: Boolean,
     selected: Boolean,
     onClick: () -> Unit,
+    onAvatarError: () -> Unit = {},
 ) {
     Card(
         modifier = Modifier
@@ -665,7 +678,7 @@ private fun OshiCompactRow(
                 Spacer(Modifier.width(10.dp))
             }
 
-            LiveRingAvatar(account = account, size = 44.dp, isLive = false)
+            LiveRingAvatar(account = account, size = 44.dp, isLive = false, onAvatarError = onAvatarError)
             Spacer(Modifier.width(12.dp))
 
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -748,6 +761,12 @@ private fun AccountDetailSheet(
     var isChecking by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
+    LaunchedEffect(account.id) {
+        if (PlatformApi.isAvatarUrlExpiredOrBlank(account.avatarUrl)) {
+            container.syncAvatarsAsync(setOf(account.id))
+        }
+    }
+
     val allEntries by container.libraryEntries.collectAsState()
     val savedCount = remember(allEntries, account.handle) {
         allEntries?.count {
@@ -817,7 +836,12 @@ private fun AccountDetailSheet(
                             Modifier.padding(16.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            LiveRingAvatar(account = account, size = 72.dp, isLive = false)
+                            LiveRingAvatar(
+                                account = account,
+                                size = 72.dp,
+                                isLive = false,
+                                onAvatarError = { container.syncAvatarsAsync(setOf(account.id)) },
+                            )
                             Spacer(Modifier.width(16.dp))
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(
@@ -1648,6 +1672,7 @@ fun RosterTransferDialog(container: AppContainer, onDismiss: () -> Unit) {
                                     try {
                                         isLoading = true
                                         val added = RosterTransfer.importIntoDb(container.db.accounts(), parsedMembers)
+                                        if (added > 0) container.syncAvatarsAsync()
                                         withContext(Dispatchers.Main) {
                                             Toast.makeText(context, "$added akun baru berhasil ditambahkan!", Toast.LENGTH_LONG).show()
                                             onDismiss()

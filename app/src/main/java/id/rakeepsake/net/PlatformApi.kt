@@ -1,7 +1,10 @@
 package id.rakeepsake.net
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -18,10 +21,102 @@ data class LiveStatus(
 /** Keluaran cek akun. */
 data class AccountCheck(val handle: String, val displayName: String, val avatarUrl: String?)
 
+internal data class TikTokWebProfile(
+    val uniqueId: String,
+    val nickname: String,
+    val userId: String?,
+    val secUid: String?,
+    val avatarUrl: String?,
+)
+
+internal data class TikTokHtmlParseResult(
+    val profile: TikTokWebProfile?,
+    val statusCode: Int?,
+)
+
 class PlatformException(message: String) : Exception(message)
 
 object PlatformApi {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    private val expiresRegex = Regex("""(?:^|[?&])x-expires=(\d+)""", RegexOption.IGNORE_CASE)
+    private val terminalMissingCodes = setOf(10203, 10204, 10221, 10223)
+
+    /** Mengembalikan true bila URL avatar kosong atau token `x-expires` sudah/akan habis (< 1 jam). */
+    fun isAvatarUrlExpiredOrBlank(url: String?, nowEpochSec: Long = System.currentTimeMillis() / 1000L): Boolean {
+        if (url.isNullOrBlank()) return true
+        val exp = expiresRegex.find(url)?.groupValues?.getOrNull(1)?.toLongOrNull() ?: return false
+        return nowEpochSec >= exp - 3600L
+    }
+
+    /** Ambil URL gambar avatar terbaik dari objek JSON TikTok (mendukung string maupun url_list). */
+    internal fun extractAvatarUrl(obj: JsonObject?): String? {
+        if (obj == null) return null
+        val keys = listOf("avatarLarger", "avatarMedium", "avatarThumb", "avatar")
+        for (k in keys) {
+            val el = obj[k] ?: continue
+            val candidate = when (el) {
+                is JsonPrimitive -> el.contentOrNull?.takeIf { it.startsWith("http", ignoreCase = true) }
+                is JsonObject -> (el["url_list"] as? JsonArray ?: el["urlList"] as? JsonArray)
+                    ?.firstNotNullOfOrNull { item ->
+                        (item as? JsonPrimitive)?.contentOrNull?.takeIf { it.startsWith("http", ignoreCase = true) }
+                    }
+                is JsonArray -> el.firstNotNullOfOrNull { item ->
+                    (item as? JsonPrimitive)?.contentOrNull?.takeIf { it.startsWith("http", ignoreCase = true) }
+                }
+                else -> null
+            }
+            if (!candidate.isNullOrBlank()) return candidate
+        }
+        return null
+    }
+
+    /** Parse payload `__UNIVERSAL_DATA_FOR_REHYDRATION__` dari HTML halaman profil TikTok. */
+    internal fun parseTikTokUserDetailFromHtml(html: String, expectedHandle: String): TikTokHtmlParseResult {
+        val marker = "__UNIVERSAL_DATA_FOR_REHYDRATION__"
+        val start = html.indexOf(marker)
+        if (start < 0) return TikTokHtmlParseResult(null, null)
+        val first = html.indexOf('>', start)
+        if (first < 0) return TikTokHtmlParseResult(null, null)
+        val last = html.indexOf("</script>", first)
+        if (last <= first + 1) return TikTokHtmlParseResult(null, null)
+
+        return runCatching {
+            val payload = html.substring(first + 1, last)
+            val root = json.parseToJsonElement(payload).jsonObject
+            val scope = root["__DEFAULT_SCOPE__"] as? JsonObject
+            val userDetail = scope?.get("webapp.user-detail") as? JsonObject
+            val statusCode = userDetail?.get("statusCode")?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+            val userInfo = userDetail?.get("userInfo") as? JsonObject
+            val userObj = userInfo?.get("user") as? JsonObject ?: return@runCatching TikTokHtmlParseResult(null, statusCode)
+
+            val uniqueId = userObj["uniqueId"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            if (uniqueId.isBlank() || !uniqueId.equals(expectedHandle, ignoreCase = true)) {
+                if (uniqueId.isNotBlank()) {
+                    runCatching {
+                        android.util.Log.w("RaPlatformApi", "Profil @$expectedHandle: uniqueId '$uniqueId' != handle '$expectedHandle', abaikan!")
+                    }
+                }
+                return@runCatching TikTokHtmlParseResult(null, statusCode)
+            }
+
+            val id = userObj["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            val secUid = userObj["secUid"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            val nickname = userObj["nickname"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: uniqueId
+            val avatar = extractAvatarUrl(userObj)
+            TikTokHtmlParseResult(
+                profile = TikTokWebProfile(
+                    uniqueId = uniqueId,
+                    nickname = nickname,
+                    userId = id,
+                    secUid = secUid,
+                    avatarUrl = avatar,
+                ),
+                statusCode = statusCode,
+            )
+        }.getOrElse {
+            TikTokHtmlParseResult(null, null)
+        }
+    }
 
     // ---------- TikTok live ----------
     fun tiktokLive(handle: String, cookie: String? = null): LiveStatus {
@@ -63,9 +158,7 @@ object PlatformApi {
             val roomId = user?.get("roomId")?.jsonPrimitive?.content
                 ?: liveRoom?.get("roomId")?.jsonPrimitive?.content
 
-            val userAvatar = user?.get("avatarLarger")?.jsonPrimitive?.content
-                ?: user?.get("avatarMedium")?.jsonPrimitive?.content
-                ?: user?.get("avatarThumb")?.jsonPrimitive?.content
+            val userAvatar = extractAvatarUrl(user)
 
             android.util.Log.d("RaPlatformApi", "Cek live @$h: status=$status (2=LIVE), roomId=$roomId")
 
@@ -155,11 +248,91 @@ object PlatformApi {
         return o["rtmp_pull_url"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
     }
 
-    fun tiktokCheck(handle: String): AccountCheck = run {
+    private val tiktokUserCache = java.util.concurrent.ConcurrentHashMap<String, Pair<String, String>>()
+
+    fun fetchAccountAvatar(platform: String, handle: String): String? = when (platform.uppercase()) {
+        "TIKTOK" -> tiktokCheck(handle).avatarUrl
+        "SHOWROOM" -> showroomCheck(handle).avatarUrl
+        "IDN" -> idnCheck(handle).avatarUrl
+        else -> null
+    }
+
+    private fun fetchTikTokWebProfile(
+        handle: String,
+        cookieHeader: String? = null,
+        allowCookieFallback: Boolean = false,
+    ): Pair<TikTokHtmlParseResult, String> {
+        val h = handle.removePrefix("@").trim()
+        val baseHeaders = mapOf(
+            "User-Agent" to Http.UA_MOBILE,
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Referer" to "https://www.tiktok.com/",
+        )
+        var cookies = ""
+        var result = TikTokHtmlParseResult(null, null)
+
+        // JANGAN menyertakan Cookie pengguna di percobaan pertama saat scraping profil publik,
+        // agar profil target tidak tercemar data sesi akun yang sedang login (app-context.user).
+        runCatching {
+            val fetched = Http.getTextWithCookies("https://www.tiktok.com/@$h", referer = "https://www.tiktok.com/", headers = baseHeaders)
+            cookies = Http.mergeCookies(cookies, fetched.cookies)
+            result = parseTikTokUserDetailFromHtml(fetched.body, h)
+        }.onFailure {
+            android.util.Log.w("RaPlatformApi", "Gagal scrape profil (mobile) @$h: ${it.message}")
+        }
+
+        // Bila masih kosong dan status bukan akun nonaktif, coba UA web
+        if (result.profile == null && result.statusCode !in terminalMissingCodes) {
+            runCatching {
+                val webHeaders = baseHeaders.toMutableMap().apply { put("User-Agent", Http.UA_WEB) }
+                val fetched = Http.getTextWithCookies("https://www.tiktok.com/@$h", referer = "https://www.tiktok.com/", headers = webHeaders)
+                cookies = Http.mergeCookies(cookies, fetched.cookies)
+                result = parseTikTokUserDetailFromHtml(fetched.body, h)
+            }.onFailure {
+                android.util.Log.w("RaPlatformApi", "Gagal scrape profil (web) @$h: ${it.message}")
+            }
+        }
+
+        // Cadangan dengan cookie sesi bila profil privat / dibatasi (khusus pemantau konten)
+        if (result.profile == null && allowCookieFallback && !cookieHeader.isNullOrBlank() && result.statusCode !in terminalMissingCodes) {
+            runCatching {
+                val authHeaders = baseHeaders.toMutableMap().apply { put("Cookie", cookieHeader) }
+                val fetched = Http.getTextWithCookies("https://www.tiktok.com/@$h", referer = "https://www.tiktok.com/", headers = authHeaders)
+                cookies = Http.mergeCookies(cookies, fetched.cookies)
+                result = parseTikTokUserDetailFromHtml(fetched.body, h)
+            }.onFailure {
+                android.util.Log.w("RaPlatformApi", "Gagal scrape profil (cookie) @$h: ${it.message}")
+            }
+        }
+
+        result.profile?.let { prof ->
+            if (!prof.userId.isNullOrBlank() && !prof.secUid.isNullOrBlank()) {
+                tiktokUserCache[h.lowercase()] = Pair(prof.userId, prof.secUid)
+            }
+        }
+        return result to cookies
+    }
+
+    fun tiktokCheck(handle: String): AccountCheck {
         val h = handle.removePrefix("@").trim()
         if (h.isBlank()) throw PlatformException("Username TikTok tidak boleh kosong.")
 
-        // 1. Coba api-live/user/room (mendapatkan nickname dan avatar kualitas tinggi resmi)
+        var bestHandle = h
+        var bestNick: String? = null
+        var webSecUid: String? = null
+
+        // 1. Utama: scraping halaman profil publik TikTok (@handle) untuk nickname + foto profil + secUid
+        val (webRes, _) = fetchTikTokWebProfile(h)
+        webRes.profile?.let { prof ->
+            bestHandle = prof.uniqueId.ifBlank { h }
+            bestNick = prof.nickname
+            webSecUid = prof.secUid
+            if (!prof.avatarUrl.isNullOrBlank()) {
+                return AccountCheck(bestHandle, prof.nickname, prof.avatarUrl)
+            }
+        }
+
+        // 2. Cadangan: api-live/user/room (mendapatkan nickname dan avatar bila tersedia)
         try {
             val url = "https://www.tiktok.com/api-live/user/room/?aid=1988&app_name=tiktok_web&device_platform=web_pc&uniqueId=$h&sourceType=54"
             val body = Http.getText(url, referer = "https://www.tiktok.com/@$h/live")
@@ -167,51 +340,84 @@ object PlatformApi {
             val data = root["data"] as? JsonObject
             val user = data?.get("user") as? JsonObject
             if (user != null) {
-                val nickname = user["nickname"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: h
-                val avatar = user["avatarLarger"]?.jsonPrimitive?.content
-                    ?: user["avatarMedium"]?.jsonPrimitive?.content
-                    ?: user["avatarThumb"]?.jsonPrimitive?.content
-                return AccountCheck(h, nickname, avatar)
+                val nickname = user["nickname"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: bestNick ?: h
+                val avatar = extractAvatarUrl(user)
+                if (bestNick == null) bestNick = nickname
+                if (!avatar.isNullOrBlank()) {
+                    return AccountCheck(bestHandle, nickname, avatar)
+                }
             }
         } catch (_: Exception) {
         }
 
-        // 2. Coba via secUid (terutama jika ada di cache atau akun khusus)
-        val cachedSecUid = tiktokUserCache[h]?.second ?: when {
-            h.equals("jkt48.ella.a", ignoreCase = true) -> "MS4wLjABAAAAXGnR-8ZJ_YICXhh1_oUpnVnqtiM2_eu634dgHj1GcW3AT3Sm0BP-6gpY1zUW71Oc"
-            h.equals("cathleenixie8", ignoreCase = true) -> "MS4wLjABAAAACeqUz2zueObNqQkeTD4Lip36c_gksNpjRPm2-C_CZGZXjA1z3M5UFFnmtOG3fh8F"
-            h.equals("g1ttt", ignoreCase = true) -> "MS4wLjABAAAA5kfF46q_shaT0enyiRanEDcUx53BuLQWo-Qs0xxBUX3N206VOt44N_fcX5a1xfAt"
-            else -> null
-        }
+        // 3. Cadangan: /api/creator/item_list/ via secUid dari profil / cache
+        val cachedSecUid = webSecUid ?: tiktokUserCache[h.lowercase()]?.second
         if (!cachedSecUid.isNullOrBlank()) {
             try {
                 val creatorUrl = "https://www.tiktok.com/api/creator/item_list/?aid=1988&app_language=en&app_name=tiktok_web&count=1&cursor=0&device_platform=web_pc&secUid=$cachedSecUid&type=1"
                 val body = Http.getText(creatorUrl, referer = "https://www.tiktok.com/@$h")
                 val root = json.parseToJsonElement(body).jsonObject
-                val items = root["itemList"] as? kotlinx.serialization.json.JsonArray
+                val items = root["itemList"] as? JsonArray
                 val first = items?.firstOrNull() as? JsonObject
                 val author = first?.get("author") as? JsonObject
                 if (author != null) {
-                    val nickname = author["nickname"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: h
-                    val avatar = author["avatarLarger"]?.jsonPrimitive?.content
-                        ?: author["avatarMedium"]?.jsonPrimitive?.content
-                        ?: author["avatarThumb"]?.jsonPrimitive?.content
-                    return AccountCheck(h, nickname, avatar)
+                    val nickname = author["nickname"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: bestNick ?: h
+                    val avatar = extractAvatarUrl(author)
+                    if (bestNick == null) bestNick = nickname
+                    if (!avatar.isNullOrBlank()) {
+                        return AccountCheck(bestHandle, nickname, avatar)
+                    }
                 }
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+            }
         }
 
-        // 3. Coba oEmbed resmi TikTok
+        // 4. Cadangan: TikWM user/info & user/posts (memuat foto profil kreator bila web TikTok diblokir)
+        runCatching {
+            val infoBody = Http.getText("https://www.tikwm.com/api/user/info?unique_id=$h", referer = "https://www.tikwm.com/")
+            val infoRoot = json.parseToJsonElement(infoBody).jsonObject
+            if (infoRoot["code"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() == 0) {
+                val uObj = (infoRoot["data"] as? JsonObject)?.get("user") as? JsonObject
+                if (uObj != null) {
+                    val nickname = uObj["nickname"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: bestNick ?: h
+                    val avatar = extractAvatarUrl(uObj)
+                    if (bestNick == null) bestNick = nickname
+                    if (!avatar.isNullOrBlank()) {
+                        return AccountCheck(bestHandle, nickname, avatar)
+                    }
+                }
+            }
+        }
+
+        runCatching {
+            val postsBody = Http.getText("https://www.tikwm.com/api/user/posts?unique_id=$h&count=1", referer = "https://www.tikwm.com/")
+            val postsRoot = json.parseToJsonElement(postsBody).jsonObject
+            if (postsRoot["code"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() == 0) {
+                val videos = (postsRoot["data"] as? JsonObject)?.get("videos") as? JsonArray
+                val author = (videos?.firstOrNull() as? JsonObject)?.get("author") as? JsonObject
+                val nickname = author?.get("nickname")?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: bestNick ?: h
+                val avatar = extractAvatarUrl(author)
+                if (bestNick == null) bestNick = nickname
+                if (!avatar.isNullOrBlank()) {
+                    return AccountCheck(bestHandle, nickname, avatar)
+                }
+            }
+        }
+
+        // 5. Cadangan oEmbed resmi TikTok (gunakan lowercase agar handle kapital tidak ditolak 400)
         try {
-            val body = Http.getText("https://www.tiktok.com/oembed?url=https://www.tiktok.com/@$h")
+            val body = Http.getText("https://www.tiktok.com/oembed?url=https://www.tiktok.com/@${h.lowercase()}")
             val root = json.parseToJsonElement(body).jsonObject
-            val name = root["author_name"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: h
-            return AccountCheck(h, name, null)
+            val name = root["author_name"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: bestNick ?: h
+            return AccountCheck(bestHandle, name, null)
         } catch (_: Exception) {
-            // oEmbed gagal
         }
 
-        // 4. Cadangan: TiktokAccount.check
+        if (bestNick != null) {
+            return AccountCheck(bestHandle, bestNick!!, null)
+        }
+
+        // 6. Cadangan terakhir: TiktokAccount.check
         try {
             val (h2, name) = TiktokAccount.check(h)
             return AccountCheck(h2, name ?: h2, null)
@@ -232,125 +438,33 @@ object PlatformApi {
         val mediaCookies: String? = null,
     )
 
-    private val tiktokUserCache = java.util.concurrent.ConcurrentHashMap<String, Pair<String, String>>()
-
     fun tiktokRecentPosts(handle: String, limit: Int = 15, cookie: String? = null): List<PostRef> {
         val h = handle.removePrefix("@").trim()
+        val cacheKey = h.lowercase()
         val cookieHeader = cookie?.let { c ->
             if (c.contains("=")) c else "sessionid=$c; sessionid_ss=$c; sid_tt=$c"
         }
 
         val items = mutableListOf<PostRef>()
         var webChainCookies = ""
-        var userId: String? = tiktokUserCache[h]?.first
-        var secUid: String? = tiktokUserCache[h]?.second
+        var userId: String? = tiktokUserCache[cacheKey]?.first
+        var secUid: String? = tiktokUserCache[cacheKey]?.second
 
         // 1. Scraping Data Halaman Profil TikTok jika belum ada di cache
         if (userId.isNullOrBlank() || secUid.isNullOrBlank()) {
-            val headers = mutableMapOf(
-                "User-Agent" to Http.UA_MOBILE,
-                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Referer" to "https://www.tiktok.com/",
+            val (webRes, scrapedCookies) = fetchTikTokWebProfile(
+                handle = h,
+                cookieHeader = cookieHeader,
+                allowCookieFallback = true,
             )
-            // JANGAN menyertakan Cookie pengguna saat scraping profil publik,
-            // agar profil target tidak tercemar oleh data sesi akun yang sedang login (app-context.user)
-
-            runCatching {
-                val fetched = Http.getTextWithCookies("https://www.tiktok.com/@$h", referer = "https://www.tiktok.com/", headers = headers)
-                webChainCookies = Http.mergeCookies(webChainCookies, fetched.cookies)
-                val html = fetched.body
-                val marker = "__UNIVERSAL_DATA_FOR_REHYDRATION__"
-                val start = html.indexOf(marker)
-                if (start >= 0) {
-                    val first = html.indexOf('>', start)
-                    val last = html.indexOf("</script>", first)
-                    if (first in 0 until last) {
-                        val payload = html.substring(first + 1, last)
-                        val root = json.parseToJsonElement(payload).jsonObject
-
-                        val scope = root["__DEFAULT_SCOPE__"] as? JsonObject
-                        val userDetail = scope?.get("webapp.user-detail") as? JsonObject
-                        val statusCode = userDetail?.get("statusCode")?.jsonPrimitive?.content?.toIntOrNull() ?: 0
-                        if (statusCode != 0) {
-                            android.util.Log.w("RaPlatformApi", "Profil @$h: user-detail statusCode=$statusCode (akun mungkin tidak ada / ganti username)")
-                        }
-                        val userInfo = userDetail?.get("userInfo") as? JsonObject
-                        val userObj = userInfo?.get("user") as? JsonObject
-                        if (userObj != null) {
-                            val uniqueId = userObj["uniqueId"]?.jsonPrimitive?.content
-                            // Verifikasi ketat: pastikan uniqueId dari halaman cocok dengan handle yang diminta ($h)!
-                            if (uniqueId != null && uniqueId.equals(h, ignoreCase = true)) {
-                                userId = userObj["id"]?.jsonPrimitive?.content
-                                secUid = userObj["secUid"]?.jsonPrimitive?.content
-                            } else {
-                                android.util.Log.w("RaPlatformApi", "Profil @$h: uniqueId '$uniqueId' != handle '$h', abaikan!")
-                            }
-                        }
-                    }
-                }
-                if (!userId.isNullOrBlank() && !secUid.isNullOrBlank()) {
-                    tiktokUserCache[h] = Pair(userId!!, secUid!!)
-                }
-            }.onFailure {
-                android.util.Log.w("RaPlatformApi", "Gagal scrape profil @$h: ${it.message}")
+            webChainCookies = Http.mergeCookies(webChainCookies, scrapedCookies)
+            val statusCode = webRes.statusCode ?: 0
+            if (statusCode != 0) {
+                android.util.Log.w("RaPlatformApi", "Profil @$h: user-detail statusCode=$statusCode (akun mungkin tidak ada / ganti username)")
             }
-
-            // Fallback scraping dengan cookie bila profil privat / 403
-            if ((userId.isNullOrBlank() || secUid.isNullOrBlank()) && !cookieHeader.isNullOrBlank()) {
-                runCatching {
-                    val authHeaders = headers.toMutableMap().apply { put("Cookie", cookieHeader) }
-                    val html = Http.getText("https://www.tiktok.com/@$h", referer = "https://www.tiktok.com/", headers = authHeaders)
-                    val marker = "__UNIVERSAL_DATA_FOR_REHYDRATION__"
-                    val start = html.indexOf(marker)
-                    if (start >= 0) {
-                        val first = html.indexOf('>', start)
-                        val last = html.indexOf("</script>", first)
-                        if (first in 0 until last) {
-                            val payload = html.substring(first + 1, last)
-                            val root = json.parseToJsonElement(payload).jsonObject
-                            val scope = root["__DEFAULT_SCOPE__"] as? JsonObject
-                            val userDetail = scope?.get("webapp.user-detail") as? JsonObject
-                            val userInfo = userDetail?.get("userInfo") as? JsonObject
-                            val userObj = userInfo?.get("user") as? JsonObject
-                            if (userObj != null) {
-                                val uniqueId = userObj["uniqueId"]?.jsonPrimitive?.content
-                                if (uniqueId != null && uniqueId.equals(h, ignoreCase = true)) {
-                                    userId = userObj["id"]?.jsonPrimitive?.content
-                                    secUid = userObj["secUid"]?.jsonPrimitive?.content
-                                }
-                            }
-                        }
-                    }
-                    if (!userId.isNullOrBlank() && !secUid.isNullOrBlank()) {
-                        tiktokUserCache[h] = Pair(userId!!, secUid!!)
-                    }
-                }.onFailure {
-                    android.util.Log.w("RaPlatformApi", "Gagal scrape profil @$h dengan cookie: ${it.message}")
-                }
-            }
-
-            // Fallback id & secUid bawaan untuk akun idol & user jika masih null
-            if (userId.isNullOrBlank()) {
-                when {
-                    h.equals("jkt48.ella.a", ignoreCase = true) -> {
-                        userId = "7059270147147744282"
-                        secUid = "MS4wLjABAAAAXGnR-8ZJ_YICXhh1_oUpnVnqtiM2_eu634dgHj1GcW3AT3Sm0BP-6gpY1zUW71Oc"
-                        tiktokUserCache[h] = Pair(userId!!, secUid!!)
-                        android.util.Log.d("RaPlatformApi", "Menggunakan info profil tersimpan untuk @jkt48.ella.a")
-                    }
-                    h.equals("cathleenixie8", ignoreCase = true) -> {
-                        userId = "7160634166081111067"
-                        secUid = "MS4wLjABAAAACeqUz2zueObNqQkeTD4Lip36c_gksNpjRPm2-C_CZGZXjA1z3M5UFFnmtOG3fh8F"
-                        tiktokUserCache[h] = Pair(userId!!, secUid!!)
-                        android.util.Log.d("RaPlatformApi", "Menggunakan info profil tersimpan untuk @cathleenixie8")
-                    }
-                    h.equals("g1ttt", ignoreCase = true) -> {
-                        userId = "6913036140283888642"
-                        secUid = "MS4wLjABAAAA5kfF46q_shaT0enyiRanEDcUx53BuLQWo-Qs0xxBUX3N206VOt44N_fcX5a1xfAt"
-                        tiktokUserCache[h] = Pair(userId!!, secUid!!)
-                        android.util.Log.d("RaPlatformApi", "Menggunakan info profil tersimpan untuk @g1ttt")
-                    }
-                }
+            webRes.profile?.let { prof ->
+                userId = prof.userId
+                secUid = prof.secUid
             }
         }
 

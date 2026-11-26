@@ -76,6 +76,7 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -347,6 +348,7 @@ fun LiveRingAvatar(
     size: Dp = 56.dp,
     isLive: Boolean = true,
     modifier: Modifier = Modifier,
+    onAvatarError: (() -> Unit)? = null,
 ) {
     val animatorsEnabled = remember { runCatching { ValueAnimator.areAnimatorsEnabled() }.getOrDefault(true) }
     val ringAlpha = if (isLive && animatorsEnabled) {
@@ -383,12 +385,22 @@ fun LiveRingAvatar(
             border = BorderStroke(1.dp, if (isLive) Ra.colors.sun.copy(alpha = 0.5f) else Ra.colors.outline),
             modifier = Modifier.size(size),
         ) {
+            val avatarUrl = account.avatarUrl
+            var imageLoaded by remember(avatarUrl) { mutableStateOf(false) }
+
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                if (!account.avatarUrl.isNullOrBlank()) {
+                if (!imageLoaded || avatarUrl.isNullOrBlank()) {
+                    Text(
+                        account.displayName.ifBlank { account.handle }.take(1).uppercase().ifBlank { "?" },
+                        color = platformColor,
+                        style = MaterialTheme.typography.titleMedium.copy(fontSize = if (size >= 52.dp) 20.sp else 16.sp),
+                    )
+                }
+                if (!avatarUrl.isNullOrBlank()) {
                     val ctx = LocalContext.current
-                    val avatarReq = remember(account.avatarUrl) {
+                    val avatarReq = remember(avatarUrl) {
                         ImageRequest.Builder(ctx)
-                            .data(account.avatarUrl)
+                            .data(avatarUrl)
                             .size(160)
                             .allowRgb565(true)
                             .crossfade(false)
@@ -398,13 +410,12 @@ fun LiveRingAvatar(
                         model = avatarReq,
                         contentDescription = account.displayName.ifBlank { account.handle },
                         contentScale = ContentScale.Crop,
+                        onSuccess = { imageLoaded = true },
+                        onError = {
+                            imageLoaded = false
+                            onAvatarError?.invoke()
+                        },
                         modifier = Modifier.fillMaxSize().clip(CircleShape),
-                    )
-                } else {
-                    Text(
-                        account.displayName.ifBlank { account.handle }.take(1).uppercase().ifBlank { "?" },
-                        color = platformColor,
-                        style = MaterialTheme.typography.titleMedium.copy(fontSize = if (size >= 52.dp) 20.sp else 16.sp),
                     )
                 }
             }

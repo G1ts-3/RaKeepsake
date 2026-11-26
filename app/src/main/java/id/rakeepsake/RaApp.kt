@@ -21,6 +21,7 @@ class RaApp : Application(), ImageLoaderFactory {
 
     override fun newImageLoader(): ImageLoader =
         ImageLoader.Builder(this)
+            .okHttpClient { id.rakeepsake.net.Http.client }
             .allowRgb565(true)
             .crossfade(false)
             .memoryCache {

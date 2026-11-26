@@ -232,7 +232,7 @@ class LiveMonitorService : LifecycleService() {
             }
 
             for ((account, status) in checkResults) {
-                if (!status.avatarUrl.isNullOrBlank() && account.avatarUrl.isNullOrBlank()) {
+                if (!status.avatarUrl.isNullOrBlank() && PlatformApi.isAvatarUrlExpiredOrBlank(account.avatarUrl)) {
                     container.db.accounts().setAvatarUrl(account.id, status.avatarUrl)
                 }
                 if (status.live) {
