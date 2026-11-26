@@ -599,11 +599,13 @@ enum class SmallKind { PRIMARY, SECONDARY }
 fun RaToggle(
     checked: Boolean,
     labelDesc: String = "",
+    enabled: Boolean = true,
     onChange: (Boolean) -> Unit,
 ) {
     Switch(
         checked = checked,
         onCheckedChange = onChange,
+        enabled = enabled,
         modifier = if (labelDesc.isNotBlank()) {
             Modifier.semantics {
                 contentDescription = "$labelDesc: ${if (checked) "aktif" else "nonaktif"}"
@@ -616,6 +618,11 @@ fun RaToggle(
             uncheckedTrackColor = Color(0xFF28201C),
             uncheckedThumbColor = Color(0xFFD3C5B0),
             uncheckedBorderColor = Color(0xFF5A4E48),
+            disabledCheckedTrackColor = Ra.colors.sun.copy(alpha = 0.35f),
+            disabledCheckedThumbColor = Ra.colors.onSun.copy(alpha = 0.55f),
+            disabledUncheckedTrackColor = Color(0xFF28201C).copy(alpha = 0.5f),
+            disabledUncheckedThumbColor = Color(0xFFD3C5B0).copy(alpha = 0.4f),
+            disabledUncheckedBorderColor = Color(0xFF5A4E48).copy(alpha = 0.4f),
         ),
     )
 }
@@ -644,14 +651,18 @@ fun SettingRow(
             Text(
                 title,
                 style = MaterialTheme.typography.titleMedium,
-                color = if (enabled) Ra.colors.text else Ra.colors.textMuted,
+                color = if (enabled) Ra.colors.text else Ra.colors.textMuted.copy(alpha = 0.65f),
             )
             if (subtitle != null) {
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Ra.colors.textMuted)
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (enabled) Ra.colors.textMuted else Ra.colors.textMuted.copy(alpha = 0.55f),
+                )
             }
         }
         when {
-            toggle != null && onToggle != null -> RaToggle(toggleValue, labelDesc = title) { onToggle(it) }
+            toggle != null && onToggle != null -> RaToggle(toggleValue, labelDesc = title, enabled = enabled) { onToggle(it) }
             value != null -> Text(
                 value,
                 style = MaterialTheme.typography.bodyMedium,

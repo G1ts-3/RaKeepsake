@@ -6,4 +6,6 @@
     <string name="notif_channel_record_desc">Progres dan hasil perekaman live</string>
     <string name="notif_channel_download">Unduhan</string>
     <string name="notif_channel_download_desc">Progres dan hasil unduhan postingan</string>
+    <string name="notif_channel_cloud_upload">Upload ke Drive</string>
+    <string name="notif_channel_cloud_upload_desc">Progres dan status unggahan ke Google Drive</string>
 </resources>

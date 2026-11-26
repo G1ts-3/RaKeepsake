@@ -74,6 +74,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import id.rakeepsake.BuildConfig
 import id.rakeepsake.R
+import id.rakeepsake.cloud.ui.CloudSettingsSection
 import id.rakeepsake.data.AppContainer
 import id.rakeepsake.data.ScheduleWindow
 import id.rakeepsake.monitor.LiveMonitorService
@@ -560,6 +561,9 @@ fun SettingsScreen(
                 onToggle = { on -> scope.launch { container.settings.setDeleteAfterMove(on) } },
             )
         }
+
+        // ---- 4b. CLOUD (GOOGLE DRIVE) ----
+        CloudSettingsSection(container = container)
 
         // ---- 5. NOTIFIKASI & IZIN + KETAHANAN LATAR BELAKANG ----
         SectionLabel("NOTIFIKASI & KETAHANAN")
@@ -1054,7 +1058,7 @@ private fun qualityLabel(q: String) = when (q) {
 }
 
 @Composable
-private fun SettingGroup(content: @Composable () -> Unit) {
+internal fun SettingGroup(content: @Composable () -> Unit) {
     Surface(
         color = Ra.colors.surface,
         shape = RoundedCornerShape(20.dp),

@@ -76,6 +76,7 @@ import id.rakeepsake.R
 import id.rakeepsake.data.AppContainer
 import id.rakeepsake.monitor.LiveStateHolder
 import id.rakeepsake.net.AppUpdater
+import id.rakeepsake.util.Storage
 import kotlinx.coroutines.delay
 
 /**
@@ -103,6 +104,7 @@ fun RaScaffold(
 
     val focusManager = LocalFocusManager.current
     val snackbarHostState = remember { SnackbarHostState() }
+    var mediaViewerPayload by remember { mutableStateOf<Pair<Storage.LibEntry, String>?>(null) }
 
     val onNavigateToAccounts = remember {
         {
@@ -138,7 +140,13 @@ fun RaScaffold(
                 if ((visitedMask and (1 shl 1)) != 0) {
                     val active = tab == 1
                     Box(tabVisibilityModifier(active)) {
-                        LibraryScreen(container, Modifier, snackbarHostState, isActiveTab = active)
+                        LibraryScreen(
+                            container = container,
+                            modifier = Modifier,
+                            snackbarHostState = snackbarHostState,
+                            isActiveTab = active,
+                            onOpenMedia = { entry, title -> mediaViewerPayload = entry to title },
+                        )
                     }
                 }
                 if ((visitedMask and (1 shl 2)) != 0) {
@@ -210,6 +218,15 @@ fun RaScaffold(
                 container = container,
                 current = tab,
                 onSelect = onSelectTab,
+            )
+        }
+
+        mediaViewerPayload?.let { (entry, title) ->
+            FullScreenMediaViewer(
+                entry = entry,
+                humanTitle = title,
+                onDismiss = { mediaViewerPayload = null },
+                modifier = Modifier.fillMaxSize().zIndex(50f),
             )
         }
     }

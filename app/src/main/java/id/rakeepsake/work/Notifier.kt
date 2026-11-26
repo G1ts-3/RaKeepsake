@@ -19,9 +19,11 @@ object Notifier {
     const val CH_MONITOR = "monitor"
     const val CH_RECORD = "record"
     const val CH_DOWNLOAD = "download"
+    const val CH_CLOUD_UPLOAD = "cloud_upload"
     const val ID_MONITOR = 100
     const val ID_RECORD_BASE = 200
     const val ID_DOWNLOAD_BASE = 300
+    const val ID_CLOUD_UPLOAD_BASE = 400
 
     fun ensureChannels(context: Context) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -41,6 +43,12 @@ object Notifier {
             NotificationChannel(CH_DOWNLOAD, context.getString(R.string.notif_channel_download),
                 NotificationManager.IMPORTANCE_DEFAULT).apply {
                 description = context.getString(R.string.notif_channel_download_desc)
+            },
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CH_CLOUD_UPLOAD, context.getString(R.string.notif_channel_cloud_upload),
+                NotificationManager.IMPORTANCE_LOW).apply {
+                description = context.getString(R.string.notif_channel_cloud_upload_desc)
             },
         )
     }

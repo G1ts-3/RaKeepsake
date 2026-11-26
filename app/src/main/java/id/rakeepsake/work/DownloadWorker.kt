@@ -6,6 +6,7 @@ import androidx.compose.runtime.Immutable
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import id.rakeepsake.RaApp
+import id.rakeepsake.cloud.work.CloudUploadScheduler
 import id.rakeepsake.data.Post
 import id.rakeepsake.net.Http
 import id.rakeepsake.net.ResolveException
@@ -206,7 +207,7 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) :
         val isStory = type == "STORY" || postId.contains("story", ignoreCase = true) || sourceUrl.contains("/story/", ignoreCase = true)
 
         try {
-            val joined = executeMediaDownload(
+            val res = executeMediaDownload(
                 postId = postId,
                 mediaUrlsRaw = url,
                 audioSrc = audioUrl,
@@ -219,7 +220,8 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) :
                 cookie = cookie,
                 mediaCookies = mediaCookies,
             )
-            db.posts().updateResult(postId, "DONE", null, joined, System.currentTimeMillis())
+            db.posts().updateResult(postId, "DONE", null, res.joinedPaths, System.currentTimeMillis())
+            enqueuePublishedForCloud(res.publishedItems)
             container.refreshLibrary()
             Notifier.downloadDone(applicationContext, author, caption)
             Result.success()
@@ -249,7 +251,7 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) :
                             author = nextAuthor,
                             sourceUrl = fallbackUrl,
                         )
-                        val joined = executeMediaDownload(
+                        val res = executeMediaDownload(
                             postId = postId,
                             mediaUrlsRaw = resolved.mediaUrls.joinToString("\n"),
                             audioSrc = resolved.audioUrl ?: audioUrl,
@@ -262,7 +264,8 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) :
                             cookie = cookie,
                             mediaCookies = resolved.mediaCookies ?: mediaCookies,
                         )
-                        db.posts().updateResult(postId, "DONE", null, joined, System.currentTimeMillis())
+                        db.posts().updateResult(postId, "DONE", null, res.joinedPaths, System.currentTimeMillis())
+                        enqueuePublishedForCloud(res.publishedItems)
                         container.refreshLibrary()
                         Notifier.downloadDone(applicationContext, nextAuthor, resolved.caption)
                         return@withContext Result.success()
@@ -286,6 +289,30 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) :
         }
     }
 
+    private data class PublishedMediaItem(
+        val uri: Uri,
+        val displayName: String,
+        val mimeType: String,
+    )
+
+    private data class DownloadOutcome(
+        val joinedPaths: String,
+        val publishedItems: List<PublishedMediaItem>,
+    )
+
+    private suspend fun enqueuePublishedForCloud(items: List<PublishedMediaItem>) {
+        for (item in items) {
+            runCatching {
+                CloudUploadScheduler.enqueueIfAuto(
+                    applicationContext,
+                    item.uri,
+                    item.displayName,
+                    item.mimeType,
+                )
+            }
+        }
+    }
+
     private fun executeMediaDownload(
         postId: String,
         mediaUrlsRaw: String,
@@ -298,11 +325,12 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) :
         downloadAudioAlso: Boolean,
         cookie: String?,
         mediaCookies: String?,
-    ): String {
+    ): DownloadOutcome {
         val tmpDir = File(applicationContext.getExternalFilesDir(null), "tmp").apply { mkdirs() }
         val subFolder = if (isStory) Storage.STORY_DIR else Storage.POST_DIR
         val targetDir = "${Storage.APP_DIR}/$subFolder/$author"
         val paths = mutableListOf<String>()
+        val publishedItems = mutableListOf<PublishedMediaItem>()
 
         val mediaUrls = mediaUrlsRaw.split("\n").filter { it.isNotBlank() }
         if (mediaUrls.isEmpty()) throw Exception("Daftar URL media kosong")
@@ -323,6 +351,9 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) :
                 }
                 val published = Storage.publishImage(applicationContext, f, targetDir, displayName)
                 f.delete()
+                if (published != null) {
+                    publishedItems.add(PublishedMediaItem(published, displayName, "image/jpeg"))
+                }
                 paths.add(published?.toString() ?: "")
                 paths.add(displayName)
             }
@@ -336,10 +367,14 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) :
             val f = downloadTo(tmpDir, "tmp_vid_${System.currentTimeMillis()}", mediaUrls.first(), cookie, mediaCookies) { read, total ->
                 DownloadProgressHolder.update(DownloadProgress(postId, fileNum, totalFiles, read, total))
             }
+            val mime = Storage.mimeFor(ext)
             val published = Storage.publish(
-                applicationContext, f, targetDir, displayName, Storage.mimeFor(ext),
+                applicationContext, f, targetDir, displayName, mime,
             )
             f.delete()
+            if (published != null) {
+                publishedItems.add(PublishedMediaItem(published, displayName, mime))
+            }
             paths.add(published?.toString() ?: "")
             paths.add(displayName)
         }
@@ -359,13 +394,17 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) :
                 val pubAudio = Storage.publishAudio(applicationContext, af, targetDir, audioDisplayName)
                 af.delete()
                 if (pubAudio != null) {
+                    publishedItems.add(PublishedMediaItem(pubAudio, audioDisplayName, Storage.mimeFor("m4a")))
                     paths.add(pubAudio.toString())
                     paths.add(audioDisplayName)
                 }
             }
         }
 
-        return paths.filter { it.isNotBlank() }.joinToString("\n")
+        return DownloadOutcome(
+            joinedPaths = paths.filter { it.isNotBlank() }.joinToString("\n"),
+            publishedItems = publishedItems,
+        )
     }
 
     /** Unduh dengan dukungan resume dan callback progres byte. */

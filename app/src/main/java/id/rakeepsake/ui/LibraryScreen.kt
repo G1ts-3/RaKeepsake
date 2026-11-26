@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,7 +28,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -46,19 +46,25 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PeopleAlt
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.ViewAgenda
+import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.StarOutline
@@ -107,13 +113,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import id.rakeepsake.cloud.data.CloudUpload
+import id.rakeepsake.cloud.data.UploadState
+import id.rakeepsake.cloud.work.CloudUploadPlaybackGuard
+import id.rakeepsake.cloud.work.CloudUploadProgress
+import id.rakeepsake.cloud.work.CloudUploadProgressHolder
+import id.rakeepsake.cloud.work.CloudUploadScheduler
 import id.rakeepsake.data.Account
 import id.rakeepsake.data.AppContainer
 import id.rakeepsake.monitor.LiveStateHolder
@@ -150,6 +160,7 @@ fun LibraryScreen(
     modifier: Modifier,
     snackbarHostState: SnackbarHostState? = null,
     isActiveTab: Boolean = true,
+    onOpenMedia: ((Storage.LibEntry, String) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -186,6 +197,11 @@ fun LibraryScreen(
 
     val accounts by container.accountsFlow.collectAsState()
     val accountByHandle = remember(accounts) { accounts.associateBy { it.handle.lowercase() } }
+
+    val cloudSettings by container.cloudSettingsFlow.collectAsState()
+    val cloudUploads by container.cloudUploadsFlow.collectAsState()
+    val cloudProgressMap by CloudUploadProgressHolder.progress.collectAsState()
+    val cloudByPath = remember(cloudUploads) { cloudUploads.associateBy { it.localPath } }
 
     val settings by container.settingsFlow.collectAsState()
     val favoriteMedia = settings.favoriteMedia
@@ -384,6 +400,28 @@ fun LibraryScreen(
                             },
                         )
                         if (!visibleList.isNullOrEmpty()) {
+                            DropdownMenuItem(
+                                text = { Text("Upload semua yang belum terunggah", color = Ra.colors.text) },
+                                leadingIcon = { Icon(Icons.Filled.CloudUpload, null, tint = Ra.colors.sun) },
+                                onClick = {
+                                    showHeaderMenu = false
+                                    if (!cloudSettings.cloudEnabled) {
+                                        Toast.makeText(context, "Hubungkan Google Drive di Setelan terlebih dahulu.", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        scope.launch(Dispatchers.IO) {
+                                            val count = CloudUploadScheduler.enqueueAllPending(context)
+                                            withContext(Dispatchers.Main) {
+                                                Toast.makeText(
+                                                    context,
+                                                    if (count > 0) "$count file dimasukkan ke antrean upload Drive."
+                                                    else "Semua file sudah terunggah atau dalam antrean.",
+                                                    Toast.LENGTH_SHORT,
+                                                ).show()
+                                            }
+                                        }
+                                    }
+                                },
+                            )
                             HorizontalDivider(color = Ra.colors.outline)
                             DropdownMenuItem(
                                 text = { Text("Hapus Semua Arsip", color = Ra.colors.danger) },
@@ -572,23 +610,27 @@ fun LibraryScreen(
                                 SectionHeaderSticky(sectionTitle, "${sectionItems.size} item")
                             }
                             items(sectionItems, key = { it.first.uri.toString() }, contentType = { it.second.mediaType }) { (entry, info) ->
-                                val isFav = favoriteMedia.contains(entry.uri.toString())
-                                val isSel = selectedUris.contains(entry.uri.toString())
+                                val uriKey = entry.uri.toString()
+                                val isFav = favoriteMedia.contains(uriKey)
+                                val isSel = selectedUris.contains(uriKey)
+                                val cloudUpload = cloudByPath[uriKey]
+                                val cloudProgress = cloudProgressMap[uriKey]
                                 LibGridTile(
                                     entry = entry,
                                     info = info,
                                     isFavorite = isFav,
                                     isSelected = isSel,
                                     multiSelectActive = multiSelectActive,
+                                    cloudState = cloudUpload?.state,
                                     onClick = {
                                         if (multiSelectActive) {
-                                            if (isSel) selectedUris.remove(entry.uri.toString()) else selectedUris.add(entry.uri.toString())
+                                            if (isSel) selectedUris.remove(uriKey) else selectedUris.add(uriKey)
                                         } else {
-                                            playing = entry
+                                            if (onOpenMedia != null) onOpenMedia(entry, info.title) else playing = entry
                                         }
                                     },
                                     onLongClick = {
-                                        if (!isSel) selectedUris.add(entry.uri.toString())
+                                        if (!isSel) selectedUris.add(uriKey)
                                     },
                                 )
                             }
@@ -611,26 +653,57 @@ fun LibraryScreen(
                             SectionHeaderSticky(sectionTitle, "${sectionItems.size} item")
                         }
                         items(sectionItems, key = { it.first.uri.toString() }, contentType = { it.second.mediaType }) { (entry, info) ->
-                            val isFav = favoriteMedia.contains(entry.uri.toString())
-                            val isSel = selectedUris.contains(entry.uri.toString())
+                            val uriKey = entry.uri.toString()
+                            val isFav = favoriteMedia.contains(uriKey)
+                            val isSel = selectedUris.contains(uriKey)
+                            val cloudUpload = cloudByPath[uriKey]
+                            val cloudProgress = cloudProgressMap[uriKey]
                             LibCard(
                                 entry = entry,
                                 info = info,
                                 isFavorite = isFav,
                                 isSelected = isSel,
                                 multiSelectActive = multiSelectActive,
+                                cloudEnabled = cloudSettings.cloudEnabled,
+                                cloudUpload = cloudUpload,
+                                cloudProgress = cloudProgress,
                                 onClick = {
                                     if (multiSelectActive) {
-                                        if (isSel) selectedUris.remove(entry.uri.toString()) else selectedUris.add(entry.uri.toString())
+                                        if (isSel) selectedUris.remove(uriKey) else selectedUris.add(uriKey)
                                     } else {
-                                        playing = entry
+                                        if (onOpenMedia != null) onOpenMedia(entry, info.title) else playing = entry
                                     }
                                 },
                                 onLongClick = {
-                                    if (!isSel) selectedUris.add(entry.uri.toString())
+                                    if (!isSel) selectedUris.add(uriKey)
                                 },
                                 onToggleFavorite = {
-                                    scope.launch { container.settings.toggleFavoriteMedia(entry.uri.toString()) }
+                                    scope.launch { container.settings.toggleFavoriteMedia(uriKey) }
+                                },
+                                onUploadToCloud = {
+                                    if (!cloudSettings.cloudEnabled) {
+                                        Toast.makeText(context, "Hubungkan Google Drive di Setelan terlebih dahulu.", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        scope.launch(Dispatchers.IO) {
+                                            val queued = CloudUploadScheduler.enqueue(
+                                                context = context,
+                                                localPath = uriKey,
+                                                displayName = entry.name,
+                                                mimeType = entry.mime,
+                                                sizeBytes = entry.size,
+                                                forceReset = cloudUpload?.state == UploadState.FAILED ||
+                                                    cloudUpload?.state == UploadState.NEEDS_RECONNECT ||
+                                                    cloudUpload?.state == UploadState.QUOTA_FULL,
+                                            )
+                                            withContext(Dispatchers.Main) {
+                                                Toast.makeText(
+                                                    context,
+                                                    if (queued) "Mengantrekan ${entry.name} ke Drive…" else "Tidak dapat menjadwalkan upload.",
+                                                    Toast.LENGTH_SHORT,
+                                                ).show()
+                                            }
+                                        }
+                                    }
                                 },
                                 onShare = {
                                     runCatching {
@@ -659,6 +732,11 @@ fun LibraryScreen(
 
     // Pemutar Media Layar Penuh (Video, Foto, Audio)
     playing?.let { entry ->
+        val uriKey = entry.uri.toString()
+        DisposableEffect(uriKey) {
+            CloudUploadPlaybackGuard.markPlaying(uriKey)
+            onDispose { CloudUploadPlaybackGuard.unmarkPlaying(uriKey) }
+        }
         val humanTitle = remember(entry, accountByHandle) {
             Humanizer.humanizeEntry(entry, accountByHandle).title
         }
@@ -918,9 +996,13 @@ private fun LibCard(
     isFavorite: Boolean,
     isSelected: Boolean,
     multiSelectActive: Boolean,
+    cloudEnabled: Boolean,
+    cloudUpload: CloudUpload?,
+    cloudProgress: CloudUploadProgress?,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onUploadToCloud: () -> Unit,
     onShare: () -> Unit,
     onMove: () -> Unit,
     onInfo: () -> Unit,
@@ -998,6 +1080,11 @@ private fun LibCard(
                         style = MaterialTheme.typography.labelMedium,
                         color = Ra.colors.textSecondary,
                     )
+                    CloudStateIndicator(
+                        cloudEnabled = cloudEnabled,
+                        state = cloudUpload?.state,
+                        progress = cloudProgress,
+                    )
                 }
             }
 
@@ -1025,6 +1112,29 @@ private fun LibCard(
                                         onClick()
                                     },
                                 )
+                                val uploadState = cloudUpload?.state
+                                val canUploadNow = uploadState == null ||
+                                    uploadState == UploadState.PENDING ||
+                                    uploadState == UploadState.NEEDS_RECONNECT ||
+                                    uploadState == UploadState.QUOTA_FULL
+                                val canRetryUpload = uploadState == UploadState.FAILED
+                                if (canUploadNow || canRetryUpload) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                if (canRetryUpload) "Coba lagi" else "Upload sekarang",
+                                                color = Ra.colors.sun,
+                                            )
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Filled.CloudUpload, null, tint = Ra.colors.sun)
+                                        },
+                                        onClick = {
+                                            menuExpanded = false
+                                            onUploadToCloud()
+                                        },
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text(if (isFavorite) "Hapus dari Favorit" else "Tandai Favorit ★", color = Ra.colors.sun) },
                                     leadingIcon = {
@@ -1089,6 +1199,109 @@ private fun LibCard(
     }
 }
 
+@Composable
+private fun CloudStateIndicator(
+    cloudEnabled: Boolean,
+    state: UploadState?,
+    progress: CloudUploadProgress?,
+) {
+    when (state) {
+        null, UploadState.PENDING -> {
+            if (cloudEnabled) {
+                Icon(
+                    imageVector = Icons.Outlined.Cloud,
+                    contentDescription = "Belum diunggah",
+                    tint = Ra.colors.textMuted,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
+        }
+        UploadState.QUEUED -> {
+            Icon(
+                imageVector = Icons.Filled.Schedule,
+                contentDescription = "Menunggu antrean upload",
+                tint = Ra.colors.sun,
+                modifier = Modifier.size(15.dp),
+            )
+        }
+        UploadState.UPLOADING -> {
+            val pct = if (progress != null && progress.totalBytes > 0L) {
+                ((progress.sentBytes * 100L) / progress.totalBytes).toInt().coerceIn(0, 100)
+            } else null
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.ArrowUpward,
+                    contentDescription = "Mengunggah",
+                    tint = Ra.colors.sun,
+                    modifier = Modifier.size(14.dp),
+                )
+                Text(
+                    text = if (pct != null) "$pct%" else "…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Ra.colors.sun,
+                )
+            }
+        }
+        UploadState.DONE -> {
+            Icon(
+                imageVector = Icons.Filled.CloudDone,
+                contentDescription = "Terunggah & terverifikasi",
+                tint = Ra.colors.postFg,
+                modifier = Modifier.size(15.dp),
+            )
+        }
+        UploadState.FAILED -> {
+            Icon(
+                imageVector = Icons.Filled.ErrorOutline,
+                contentDescription = "Upload gagal",
+                tint = Ra.colors.danger,
+                modifier = Modifier.size(15.dp),
+            )
+        }
+        UploadState.NEEDS_RECONNECT -> {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.ErrorOutline,
+                    contentDescription = "Hubungkan ulang",
+                    tint = Ra.colors.danger,
+                    modifier = Modifier.size(14.dp),
+                )
+                Text(
+                    text = "Hubungkan ulang",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Ra.colors.danger,
+                    maxLines = 1,
+                )
+            }
+        }
+        UploadState.QUOTA_FULL -> {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.ErrorOutline,
+                    contentDescription = "Drive penuh",
+                    tint = Ra.colors.danger,
+                    modifier = Modifier.size(14.dp),
+                )
+                Text(
+                    text = "Drive penuh",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Ra.colors.danger,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LibGridTile(
@@ -1097,6 +1310,7 @@ private fun LibGridTile(
     isFavorite: Boolean,
     isSelected: Boolean,
     multiSelectActive: Boolean,
+    cloudState: UploadState? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
@@ -1137,6 +1351,23 @@ private fun LibGridTile(
                 tint = if (isSelected) Ra.colors.sun else Color.White,
                 modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).size(22.dp),
             )
+        } else if (cloudState != null && cloudState != UploadState.PENDING) {
+            val (icon, tint) = when (cloudState) {
+                UploadState.QUEUED -> Icons.Filled.Schedule to Ra.colors.sun
+                UploadState.UPLOADING -> Icons.Filled.ArrowUpward to Ra.colors.sun
+                UploadState.DONE -> Icons.Filled.CloudDone to Ra.colors.postFg
+                UploadState.FAILED, UploadState.NEEDS_RECONNECT, UploadState.QUOTA_FULL -> Icons.Filled.ErrorOutline to Ra.colors.danger
+                UploadState.PENDING -> Icons.Outlined.Cloud to Color.White
+            }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(5.dp)
+                    .background(Color.Black.copy(alpha = 0.65f), CircleShape)
+                    .padding(4.dp),
+            ) {
+                Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(14.dp))
+            }
         }
     }
 }
@@ -1227,189 +1458,197 @@ private suspend fun performPhysicalDelete(
     }
 }
 
-/** Pemutar media layar penuh (Full Screen Media Viewer) dengan dukungan video, audio, dan foto. */
+/** Pemutar media layar penuh (Full Screen Media Viewer) di window utama agar safeDrawing insets akurat lintas perangkat. */
 @Composable
-private fun FullScreenMediaViewer(
+internal fun FullScreenMediaViewer(
     entry: Storage.LibEntry,
     humanTitle: String,
     onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    BackHandler { onDismiss() }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false,
-        ),
+    val uriKey = entry.uri.toString()
+    DisposableEffect(uriKey) {
+        CloudUploadPlaybackGuard.markPlaying(uriKey)
+        onDispose { CloudUploadPlaybackGuard.unmarkPlaying(uriKey) }
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+            ) {},
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black),
-        ) {
-            when {
-                entry.mime.startsWith("image/") -> {
-                    AsyncImage(
-                        model = entry.uri,
-                        contentDescription = humanTitle,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .align(Alignment.Center),
+        when {
+            entry.mime.startsWith("image/") -> {
+                AsyncImage(
+                    model = entry.uri,
+                    contentDescription = humanTitle,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
+                        .align(Alignment.Center),
+                )
+            }
+            entry.mime.startsWith("audio/") -> {
+                val player = remember(entry.uri) {
+                    ExoPlayer.Builder(context).build().apply {
+                        setMediaItem(MediaItem.fromUri(entry.uri))
+                        prepare()
+                        playWhenReady = true
+                    }
+                }
+                DisposableEffect(player) {
+                    onDispose { player.release() }
+                }
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.safeDrawing)
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Audiotrack,
+                        contentDescription = "Audio",
+                        tint = Ra.colors.sun,
+                        modifier = Modifier.size(96.dp),
                     )
-                }
-                entry.mime.startsWith("audio/") -> {
-                    val player = remember(entry.uri) {
-                        ExoPlayer.Builder(context).build().apply {
-                            setMediaItem(MediaItem.fromUri(entry.uri))
-                            prepare()
-                            playWhenReady = true
-                        }
-                    }
-                    DisposableEffect(player) {
-                        onDispose { player.release() }
-                    }
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .navigationBarsPadding()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Audiotrack,
-                            contentDescription = "Audio",
-                            tint = Ra.colors.sun,
-                            modifier = Modifier.size(96.dp),
-                        )
-                        Spacer(Modifier.height(24.dp))
-                        Text(
-                            humanTitle,
-                            style = MaterialTheme.typography.titleLarge,
-                            color = Color.White,
-                            textAlign = TextAlign.Center,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "${if (entry.durationMs > 0) formatDuration(entry.durationMs) + " · " else ""}${formatBytes(entry.size)}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color.LightGray,
-                        )
-                        Spacer(Modifier.height(32.dp))
-                        AndroidView(
-                            factory = { ctx ->
-                                PlayerView(ctx).apply {
-                                    this.player = player
-                                    useController = true
-                                    controllerShowTimeoutMs = 0
-                                    setShowNextButton(false)
-                                    setShowPreviousButton(false)
-                                    setShowFastForwardButton(true)
-                                    setShowRewindButton(true)
-                                }
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(120.dp),
-                        )
-                    }
-                }
-                else -> {
-                    val player = remember(entry.uri) {
-                        ExoPlayer.Builder(context).build().apply {
-                            setMediaItem(MediaItem.fromUri(entry.uri))
-                            prepare()
-                            playWhenReady = true
-                        }
-                    }
-                    DisposableEffect(player) {
-                        onDispose { player.release() }
-                    }
+                    Spacer(Modifier.height(24.dp))
+                    Text(
+                        humanTitle,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = Color.White,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "${if (entry.durationMs > 0) formatDuration(entry.durationMs) + " · " else ""}${formatBytes(entry.size)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.LightGray,
+                    )
+                    Spacer(Modifier.height(32.dp))
                     AndroidView(
                         factory = { ctx ->
                             PlayerView(ctx).apply {
                                 this.player = player
-                                layoutParams = ViewGroup.LayoutParams(
-                                    ViewGroup.LayoutParams.MATCH_PARENT,
-                                    ViewGroup.LayoutParams.MATCH_PARENT,
-                                )
-                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                                 useController = true
-                                controllerShowTimeoutMs = 3500
-                                controllerHideOnTouch = true
+                                controllerShowTimeoutMs = 0
                                 setShowNextButton(false)
                                 setShowPreviousButton(false)
                                 setShowFastForwardButton(true)
                                 setShowRewindButton(true)
                             }
                         },
-                        modifier = Modifier.fillMaxSize().navigationBarsPadding(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(120.dp),
                     )
                 }
             }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.TopCenter)
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(Color.Black.copy(alpha = 0.85f), Color.Transparent),
-                        ),
-                    )
-                    .windowInsetsPadding(
-                        WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
-                    )
-                    .padding(horizontal = 12.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = onDismiss, modifier = Modifier.size(48.dp)) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Kembali",
-                        tint = Color.White,
-                    )
+            else -> {
+                val player = remember(entry.uri) {
+                    ExoPlayer.Builder(context).build().apply {
+                        setMediaItem(MediaItem.fromUri(entry.uri))
+                        prepare()
+                        playWhenReady = true
+                    }
                 }
-                Spacer(Modifier.width(8.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = humanTitle,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Color.White,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = "${if (entry.durationMs > 0) formatDuration(entry.durationMs) + " · " else ""}${formatBytes(entry.size)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.LightGray,
-                    )
+                DisposableEffect(player) {
+                    onDispose { player.release() }
                 }
-                Spacer(Modifier.width(8.dp))
-                IconButton(
-                    onClick = {
-                        runCatching {
-                            val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-                                setDataAndType(entry.uri, entry.mime)
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            }
-                            context.startActivity(Intent.createChooser(viewIntent, "Buka dengan aplikasi lain"))
-                        }.onFailure {
-                            Toast.makeText(context, "Tidak dapat membuka aplikasi eksternal", Toast.LENGTH_SHORT).show()
+                AndroidView(
+                    factory = { ctx ->
+                        PlayerView(ctx).apply {
+                            this.player = player
+                            layoutParams = ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                            )
+                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            useController = true
+                            controllerShowTimeoutMs = 3500
+                            controllerHideOnTouch = true
+                            setShowNextButton(false)
+                            setShowPreviousButton(false)
+                            setShowFastForwardButton(true)
+                            setShowRewindButton(true)
                         }
                     },
-                    modifier = Modifier.size(48.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-                        contentDescription = "Buka di Aplikasi Eksternal",
-                        tint = Color.White,
-                    )
-                }
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
+                        .padding(bottom = 10.dp),
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(Color.Black.copy(alpha = 0.85f), Color.Transparent),
+                    ),
+                )
+                .windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+                )
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onDismiss, modifier = Modifier.size(48.dp)) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Kembali",
+                    tint = Color.White,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = humanTitle,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "${if (entry.durationMs > 0) formatDuration(entry.durationMs) + " · " else ""}${formatBytes(entry.size)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.LightGray,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            IconButton(
+                onClick = {
+                    runCatching {
+                        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+                            setDataAndType(entry.uri, entry.mime)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        context.startActivity(Intent.createChooser(viewIntent, "Buka dengan aplikasi lain"))
+                    }.onFailure {
+                        Toast.makeText(context, "Tidak dapat membuka aplikasi eksternal", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                    contentDescription = "Buka di Aplikasi Eksternal",
+                    tint = Color.White,
+                )
             }
         }
     }

@@ -18,9 +18,17 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
 import androidx.room.Update
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import id.rakeepsake.cloud.CloudSettings
+import id.rakeepsake.cloud.StorageProvider
+import id.rakeepsake.cloud.data.CloudUpload
+import id.rakeepsake.cloud.data.CloudUploadDao
+import id.rakeepsake.cloud.data.UploadStateConverters
+import id.rakeepsake.cloud.drive.DriveStorageProvider
+import id.rakeepsake.cloud.drive.GoogleAuthManager
 import id.rakeepsake.net.AppUpdater
 import id.rakeepsake.net.PlatformApi
 import id.rakeepsake.util.Storage
@@ -230,15 +238,39 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `cloud_upload` (
+                `localPath` TEXT NOT NULL,
+                `displayName` TEXT NOT NULL,
+                `mimeType` TEXT NOT NULL,
+                `sizeBytes` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `remoteId` TEXT,
+                `sessionUri` TEXT,
+                `attempts` INTEGER NOT NULL,
+                `lastError` TEXT,
+                `updatedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`localPath`)
+            )
+            """.trimIndent(),
+        )
+    }
+}
+
 @Database(
-    entities = [Account::class, Post::class, Recording::class],
-    version = 3,
+    entities = [Account::class, Post::class, Recording::class, CloudUpload::class],
+    version = 4,
     exportSchema = false,
 )
+@TypeConverters(UploadStateConverters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun accounts(): AccountDao
     abstract fun posts(): PostDao
     abstract fun recordings(): RecordingDao
+    abstract fun cloudUploads(): CloudUploadDao
 }
 
 @OptIn(FlowPreview::class)
@@ -246,11 +278,18 @@ abstract class AppDatabase : RoomDatabase() {
 class AppContainer(context: Context) {
     val appContext: Context = context.applicationContext
     val db: AppDatabase = Room.databaseBuilder(appContext, AppDatabase::class.java, "rakeepsake.db")
-        .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
         .fallbackToDestructiveMigration()
         .build()
 
     val settings: SettingsStore = SettingsStore(appContext)
+    val cloudSettings: CloudSettings = CloudSettings(appContext)
+    val googleAuthManager: GoogleAuthManager by lazy {
+        GoogleAuthManager(appContext, cloudSettings, db.cloudUploads())
+    }
+    val storageProvider: StorageProvider by lazy {
+        DriveStorageProvider(appContext, cloudSettings, db.cloudUploads(), googleAuthManager)
+    }
     val updater: AppUpdater by lazy { AppUpdater(appContext, settings) }
 
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -264,6 +303,12 @@ class AppContainer(context: Context) {
 
     val settingsFlow: StateFlow<SettingsStore.Snapshot> = settings.snapshotFlow
         .stateIn(ioScope, SharingStarted.Eagerly, SettingsStore.Snapshot())
+
+    val cloudSettingsFlow: StateFlow<CloudSettings.Snapshot> = cloudSettings.snapshotFlow
+        .stateIn(ioScope, SharingStarted.Eagerly, CloudSettings.Snapshot())
+
+    val cloudUploadsFlow: StateFlow<List<CloudUpload>> = db.cloudUploads().all()
+        .stateIn(ioScope, SharingStarted.Eagerly, emptyList())
 
     private val _libraryEntries = MutableStateFlow<List<Storage.LibEntry>?>(null)
     val libraryEntries: StateFlow<List<Storage.LibEntry>?> = _libraryEntries.asStateFlow()

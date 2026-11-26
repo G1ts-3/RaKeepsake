@@ -16,8 +16,8 @@ android {
         applicationId = "id.rakeepsake"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.2.3"
+        versionCode = 6
+        versionName = "0.2.4"
         buildConfigField("String", "UPDATE_REPO", "\"G1ts-3/RaKeepsake\"")
     }
 
@@ -91,6 +91,7 @@ dependencies {
     ksp("androidx.room:room-compiler:2.6.1")
 
     implementation("androidx.work:work-runtime-ktx:2.10.0")
+    implementation("com.google.android.gms:play-services-auth:22.0.0")
 
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 

@@ -12,6 +12,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import id.rakeepsake.RaApp
+import id.rakeepsake.cloud.work.CloudUploadScheduler
 import id.rakeepsake.data.Platform
 import id.rakeepsake.data.Account
 import id.rakeepsake.data.Recording
@@ -393,6 +394,9 @@ class LiveMonitorService : LifecycleService() {
         val container = (application as RaApp).container
         val outcome = recorder.outcome
         val endedAt = System.currentTimeMillis()
+        var publishedUri: android.net.Uri? = null
+        var publishedName = ""
+        var publishedMime = ""
         try {
             if (!file.exists() || file.length() == 0L) {
                 file.delete()
@@ -451,6 +455,11 @@ class LiveMonitorService : LifecycleService() {
             val mime = Storage.mimeFor(ext)
             val uri = Storage.publish(this, targetFile, relativeDir, displayName, mime)
             targetFile.delete()
+            if (uri != null && (outcome.startsWith("DONE") || outcome.startsWith("STOPPED"))) {
+                publishedUri = uri
+                publishedName = displayName
+                publishedMime = mime
+            }
             lifecycleScope.launch(Dispatchers.IO) {
                 container.db.recordings().finish(
                     recRowId, endedAt, uri?.toString() ?: displayName, fileSize,
@@ -491,6 +500,11 @@ class LiveMonitorService : LifecycleService() {
             LiveStateHolder.liveNow.remove(account.id)
             seen.remove("${account.platform}:${account.handle}")
             refreshNotification()
+            publishedUri?.let { uri ->
+                lifecycleScope.launch(Dispatchers.IO) {
+                    runCatching { CloudUploadScheduler.enqueueIfAuto(this@LiveMonitorService, uri, publishedName, publishedMime) }
+                }
+            }
             lifecycleScope.launch(Dispatchers.IO) {
                 delay(2000L)
                 tick()
@@ -539,6 +553,9 @@ class LiveMonitorService : LifecycleService() {
                     val mime = Storage.mimeFor(ext)
                     val uri = Storage.publish(this@LiveMonitorService, targetFile, relativeDir, displayName, mime)
                     targetFile.delete()
+                    if (uri != null) {
+                        runCatching { CloudUploadScheduler.enqueueIfAuto(this@LiveMonitorService, uri, displayName, mime) }
+                    }
                     val container = (application as RaApp).container
                     container.db.recordings().insert(
                         Recording(
