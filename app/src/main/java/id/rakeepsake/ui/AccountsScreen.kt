@@ -48,6 +48,8 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PeopleAlt
 import androidx.compose.material.icons.filled.Refresh
@@ -1029,17 +1031,13 @@ private fun AddAccountDialog(
     var manualPlatform by remember { mutableStateOf(Platform.TIKTOK) }
     var recordLive by remember { mutableStateOf(true) }
     var watchPosts by remember { mutableStateOf(true) }
+    var showMemberPicker by remember { mutableStateOf(false) }
     var memberSearch by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var checking by remember { mutableStateOf(false) }
 
     val memberList = remember {
-        try {
-            val txt = container.appContext.assets.open("members.json").bufferedReader().use { it.readText() }
-            RosterTransfer.parseJson(txt)
-        } catch (_: Exception) {
-            emptyList()
-        }
+        RosterTransfer.loadFromAsset(container.appContext)
     }
     var pickedMember by remember { mutableStateOf<RosterTransfer.MemberEntry?>(null) }
     val filteredMembers = remember(memberList, memberSearch) {
@@ -1064,7 +1062,7 @@ private fun AddAccountDialog(
                 Text("Tambah Akun Pantauan", style = MaterialTheme.typography.titleLarge, color = Ra.colors.text)
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Cukup tempel tautan profil / video TikTok, SHOWROOM, atau IDN",
+                    "Tempel tautan profil atau ketik @username kreator",
                     style = MaterialTheme.typography.bodySmall,
                     color = Ra.colors.textSecondary,
                 )
@@ -1075,120 +1073,272 @@ private fun AddAccountDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = {
-                        input = it
-                        error = null
-                    },
-                    label = { Text("Tautan atau @username", color = Ra.colors.textMuted) },
-                    placeholder = { Text("https://www.tiktok.com/@...", color = Ra.colors.textMuted) },
-                    singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
-                    trailingIcon = {
-                        if (input.isNotBlank()) {
-                            IconButton(onClick = { input = "" }, modifier = Modifier.size(48.dp)) {
-                                Icon(Icons.Filled.Close, "Hapus", tint = Ra.colors.textSecondary)
-                            }
-                        } else {
-                            TextButton(
-                                onClick = {
-                                    val clip = clipboardManager.getText()?.text?.trim()
-                                    if (!clip.isNullOrBlank()) {
-                                        input = clip
-                                    }
-                                },
-                                modifier = Modifier.heightIn(min = 48.dp),
-                            ) {
-                                Text("Tempel", style = MaterialTheme.typography.labelLarge, color = Ra.colors.sun)
-                            }
-                        }
-                    },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Ra.colors.text,
-                        unfocusedTextColor = Ra.colors.text,
-                        focusedBorderColor = Ra.colors.sun,
-                        unfocusedBorderColor = Ra.colors.outline,
-                        cursorColor = Ra.colors.sun,
-                    ),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-
-                if (memberList.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(
-                        "Atau pilih cepat dari daftar member:",
+                        "Tautan atau @username",
                         style = MaterialTheme.typography.labelMedium,
                         color = Ra.colors.textMuted,
                     )
-                    if (memberList.size > 5) {
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = {
+                            input = it
+                            if (it.isBlank()) pickedMember = null
+                            error = null
+                        },
+                        placeholder = {
+                            Text(
+                                "@username atau link profil…",
+                                color = Ra.colors.textMuted,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                        singleLine = true,
+                        maxLines = 1,
+                        shape = RoundedCornerShape(14.dp),
+                        trailingIcon = {
+                            if (input.isNotBlank()) {
+                                IconButton(
+                                    onClick = {
+                                        input = ""
+                                        pickedMember = null
+                                        error = null
+                                    },
+                                    modifier = Modifier.size(40.dp),
+                                ) {
+                                    Icon(Icons.Filled.Close, "Hapus", tint = Ra.colors.textSecondary, modifier = Modifier.size(18.dp))
+                                }
+                            } else {
+                                Surface(
+                                    onClick = {
+                                        val clip = clipboardManager.getText()?.text?.trim()
+                                        if (!clip.isNullOrBlank()) {
+                                            input = clip
+                                            pickedMember = null
+                                            error = null
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Ra.colors.sunDim,
+                                    modifier = Modifier.padding(end = 6.dp),
+                                ) {
+                                    Text(
+                                        "Tempel",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                        color = Ra.colors.sun,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    )
+                                }
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Ra.colors.text,
+                            unfocusedTextColor = Ra.colors.text,
+                            focusedBorderColor = Ra.colors.sun,
+                            unfocusedBorderColor = Ra.colors.outline,
+                            focusedContainerColor = Ra.colors.surface,
+                            unfocusedContainerColor = Ra.colors.surface,
+                            cursorColor = Ra.colors.sun,
+                        ),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    )
+                }
+
+                if (memberList.isNotEmpty()) {
+                    Surface(
+                        onClick = { showMemberPicker = !showMemberPicker },
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (showMemberPicker || pickedMember != null) Ra.colors.sunDim else Ra.colors.surface,
+                        border = BorderStroke(
+                            1.dp,
+                            if (showMemberPicker || pickedMember != null) Ra.colors.sun.copy(alpha = 0.55f) else Ra.colors.outline.copy(alpha = 0.6f),
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Filled.PeopleAlt, null, tint = Ra.colors.sun, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = pickedMember?.let { "Dipilih: ${it.name}" } ?: "Pilih cepat member JKT48",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = if (pickedMember != null || showMemberPicker) Ra.colors.sun else Ra.colors.textSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Icon(
+                                imageVector = if (showMemberPicker) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                                contentDescription = if (showMemberPicker) "Tutup daftar" else "Buka daftar",
+                                tint = Ra.colors.textMuted,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    }
+
+                    if (showMemberPicker) {
                         OutlinedTextField(
                             value = memberSearch,
                             onValueChange = { memberSearch = it },
-                            placeholder = { Text("Cari nama member…", color = Ra.colors.textMuted) },
-                            leadingIcon = { Icon(Icons.Filled.Search, null, tint = Ra.colors.textMuted) },
-                            singleLine = true,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    ) {
-                        filteredMembers.forEach { m ->
-                            val isSelected = pickedMember == m
-                            Surface(
-                                onClick = { pickedMember = m },
-                                shape = RoundedCornerShape(999.dp),
-                                color = if (isSelected) Ra.colors.sunDim else Ra.colors.surface,
-                                border = if (isSelected) BorderStroke(1.dp, Ra.colors.sun) else BorderStroke(1.dp, Ra.colors.outline.copy(alpha = 0.5f)),
-                                modifier = Modifier.heightIn(min = 40.dp),
-                            ) {
-                                Row(
-                                    Modifier.padding(start = 6.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Box(
-                                        Modifier.size(26.dp).background(Ra.colors.sun.copy(alpha = 0.2f), CircleShape),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Text(
-                                            m.name.take(1).uppercase(),
-                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                            color = Ra.colors.sun,
-                                        )
+                            placeholder = {
+                                Text(
+                                    "Cari nama member…",
+                                    color = Ra.colors.textMuted,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
+                            leadingIcon = { Icon(Icons.Filled.Search, null, tint = Ra.colors.textMuted, modifier = Modifier.size(18.dp)) },
+                            trailingIcon = {
+                                if (memberSearch.isNotBlank()) {
+                                    IconButton(onClick = { memberSearch = "" }, modifier = Modifier.size(40.dp)) {
+                                        Icon(Icons.Filled.Close, "Hapus pencarian", tint = Ra.colors.textMuted, modifier = Modifier.size(18.dp))
                                     }
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(
-                                        m.name,
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = if (isSelected) Ra.colors.sun else Ra.colors.textSecondary,
-                                    )
+                                }
+                            },
+                            singleLine = true,
+                            maxLines = 1,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Ra.colors.text,
+                                unfocusedTextColor = Ra.colors.text,
+                                focusedBorderColor = Ra.colors.sun,
+                                unfocusedBorderColor = Ra.colors.outline,
+                                focusedContainerColor = Ra.colors.surface,
+                                unfocusedContainerColor = Ra.colors.surface,
+                                cursorColor = Ra.colors.sun,
+                            ),
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        )
+
+                        Surface(
+                            color = Ra.colors.surface,
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, Ra.colors.outline.copy(alpha = 0.45f)),
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 176.dp),
+                        ) {
+                            if (filteredMembers.isEmpty()) {
+                                Box(Modifier.fillMaxWidth().padding(14.dp), contentAlignment = Alignment.Center) {
+                                    Text("Member tidak ditemukan.", style = MaterialTheme.typography.bodySmall, color = Ra.colors.textMuted)
+                                }
+                            } else {
+                                Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 4.dp)) {
+                                    filteredMembers.forEach { m ->
+                                        val isSelected = pickedMember == m
+                                        val platformsBadge = buildList {
+                                            if (m.tiktokUser.isNotBlank()) add("TT")
+                                            if (m.showroomKey.isNotBlank()) add("SR")
+                                            if (m.idnUser.isNotBlank()) add("IDN")
+                                        }.joinToString("·")
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    pickedMember = m
+                                                    showMemberPicker = false
+                                                    memberSearch = ""
+                                                    error = null
+                                                    when {
+                                                        m.tiktokUser.isNotBlank() -> {
+                                                            manualPlatform = Platform.TIKTOK
+                                                            input = "@" + m.tiktokUser
+                                                        }
+                                                        m.idnUser.isNotBlank() -> {
+                                                            manualPlatform = Platform.IDN
+                                                            input = m.idnUser
+                                                        }
+                                                        m.showroomKey.isNotBlank() -> {
+                                                            manualPlatform = Platform.SHOWROOM
+                                                            input = m.showroomKey
+                                                        }
+                                                    }
+                                                }
+                                                .background(if (isSelected) Ra.colors.sunDim.copy(alpha = 0.5f) else Color.Transparent)
+                                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Box(
+                                                Modifier.size(28.dp).background(Ra.colors.sun.copy(alpha = 0.18f), CircleShape),
+                                                contentAlignment = Alignment.Center,
+                                            ) {
+                                                Text(
+                                                    m.name.take(1).uppercase(),
+                                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                                    color = Ra.colors.sun,
+                                                )
+                                            }
+                                            Spacer(Modifier.width(10.dp))
+                                            Column(Modifier.weight(1f)) {
+                                                Text(
+                                                    m.name,
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    color = if (isSelected) Ra.colors.sun else Ra.colors.text,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                                if (m.fullName.isNotBlank() && !m.fullName.equals(m.name, ignoreCase = true)) {
+                                                    Text(
+                                                        m.fullName,
+                                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                                        color = Ra.colors.textMuted,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                    )
+                                                }
+                                            }
+                                            Text(
+                                                platformsBadge,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                                color = Ra.colors.textMuted,
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
+
                     pickedMember?.let { m ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (m.tiktokUser.isNotBlank()) {
-                                RaChip("TikTok", active = false) {
-                                    manualPlatform = Platform.TIKTOK
-                                    input = "@" + m.tiktokUser
-                                    error = null
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                "Akun ${m.name} (${m.fullName}):",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Ra.colors.textMuted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            ) {
+                                if (m.tiktokUser.isNotBlank()) {
+                                    val active = manualPlatform == Platform.TIKTOK && input.removePrefix("@").equals(m.tiktokUser, ignoreCase = true)
+                                    RaChip("TikTok", active = active) {
+                                        manualPlatform = Platform.TIKTOK
+                                        input = "@" + m.tiktokUser
+                                        error = null
+                                    }
                                 }
-                            }
-                            if (m.showroomKey.isNotBlank()) {
-                                RaChip("SHOWROOM", active = false) {
-                                    manualPlatform = Platform.SHOWROOM
-                                    input = m.showroomKey
-                                    error = null
+                                if (m.showroomKey.isNotBlank()) {
+                                    val active = manualPlatform == Platform.SHOWROOM && input.equals(m.showroomKey, ignoreCase = true)
+                                    RaChip("SHOWROOM", active = active) {
+                                        manualPlatform = Platform.SHOWROOM
+                                        input = m.showroomKey
+                                        error = null
+                                    }
                                 }
-                            }
-                            if (m.idnUser.isNotBlank()) {
-                                RaChip("IDN", active = false) {
-                                    manualPlatform = Platform.IDN
-                                    input = m.idnUser
-                                    error = null
+                                if (m.idnUser.isNotBlank()) {
+                                    val active = manualPlatform == Platform.IDN && input.equals(m.idnUser, ignoreCase = true)
+                                    RaChip("IDN", active = active) {
+                                        manualPlatform = Platform.IDN
+                                        input = m.idnUser
+                                        error = null
+                                    }
                                 }
                             }
                         }
@@ -1438,7 +1588,7 @@ fun RosterTransferDialog(container: AppContainer, onDismiss: () -> Unit) {
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     ) {
-                        Text("Unduh Preset JKT48 (preset.id)", color = Ra.colors.text)
+                        Text("Unduh Daftar JKT48 Terbaru (Online)", color = Ra.colors.text)
                     }
 
                     OutlinedButton(

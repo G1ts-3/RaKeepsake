@@ -1,25 +1,417 @@
 {
   "members": [
     {
+      "nama_panggilan": "Anindya",
+      "nama_lengkap": "Anindya Ramadhani",
+      "media_showroom": "JKT48_Anindya",
+      "media_idn": "jkt48_anindya",
+      "media_tiktok": "anindyajkt48"
+    },
+    {
+      "nama_panggilan": "Aralie",
+      "nama_lengkap": "Abigail Rachel",
+      "media_showroom": "JKT48_Aralie",
+      "media_idn": "jkt48_aralie",
+      "media_tiktok": "jkt48.aralie"
+    },
+    {
+      "nama_panggilan": "Bella",
+      "nama_lengkap": "Christabella Bonita",
+      "media_showroom": "",
+      "media_idn": "jkt48_bella",
+      "media_tiktok": "JKT48.U16"
+    },
+    {
+      "nama_panggilan": "Carissa",
+      "nama_lengkap": "Carissa Dini",
+      "media_showroom": "",
+      "media_idn": "jkt48_carissa",
+      "media_tiktok": "JKT48.U16"
+    },
+    {
+      "nama_panggilan": "Christy",
+      "nama_lengkap": "Angelina Christy",
+      "media_showroom": "JKT48_Christy",
+      "media_idn": "jkt48_christy",
+      "media_tiktok": "christyjkt48"
+    },
+    {
+      "nama_panggilan": "Cynthia",
+      "nama_lengkap": "Cynthia Yaputera",
+      "media_showroom": "JKT48_Cynthia",
+      "media_idn": "jkt48_cynthia",
+      "media_tiktok": "cynthiajkt48"
+    },
+    {
+      "nama_panggilan": "Daisy",
+      "nama_lengkap": "Desy Natalia",
+      "media_showroom": "JKT48_Daisy",
+      "media_idn": "jkt48_daisy",
+      "media_tiktok": "daisyjkt48"
+    },
+    {
+      "nama_panggilan": "Danella",
+      "nama_lengkap": "Dena Natalia",
+      "media_showroom": "JKT48_Danella",
+      "media_idn": "jkt48_danella",
+      "media_tiktok": "danellajkt48"
+    },
+    {
+      "nama_panggilan": "Delynn",
+      "nama_lengkap": "Adeline Wijaya",
+      "media_showroom": "JKT48_Delynn",
+      "media_idn": "jkt48_delynn",
+      "media_tiktok": "jkt48.delynn"
+    },
+    {
+      "nama_panggilan": "Ekin",
+      "nama_lengkap": "Jacqueline Immanuela",
+      "media_showroom": "",
+      "media_idn": "jkt48_ekin",
+      "media_tiktok": "jkt48.ekin"
+    },
+    {
+      "nama_panggilan": "Eli",
+      "nama_lengkap": "Helisma Putri",
+      "media_showroom": "JKT48_Eli",
+      "media_idn": "jkt48_eli",
+      "media_tiktok": ""
+    },
+    {
+      "nama_panggilan": "Elin",
+      "nama_lengkap": "Celline Thefani",
+      "media_showroom": "JKT48_Elin",
+      "media_idn": "jkt48_elin",
+      "media_tiktok": "elinjkt48"
+    },
+    {
       "nama_panggilan": "Ella",
-      "nama_lengkap": "Gabriela Abigail",
+      "nama_lengkap": "Gabriela Abigail Mewengkang",
       "media_showroom": "JKT48_Ella",
       "media_idn": "jkt48_ella",
       "media_tiktok": "jkt48.ella.a"
     },
     {
-      "nama_panggilan": "Cathy",
-      "nama_lengkap": "Cathleen Nixie",
-      "media_showroom": "",
-      "media_idn": "",
-      "media_tiktok": "cathleenixie8"
+      "nama_panggilan": "Erine",
+      "nama_lengkap": "Catherina Vallencia",
+      "media_showroom": "JKT48_Erine",
+      "media_idn": "jkt48_erine",
+      "media_tiktok": "jkt48.erine_"
     },
     {
-      "nama_panggilan": "git",
-      "nama_lengkap": "g1ttt",
+      "nama_panggilan": "Fahira",
+      "nama_lengkap": "Fahira Putri",
       "media_showroom": "",
-      "media_idn": "",
-      "media_tiktok": "g1ttt"
+      "media_idn": "jkt48_fahira",
+      "media_tiktok": "JKT48.U16"
+    },
+    {
+      "nama_panggilan": "Feni",
+      "nama_lengkap": "Feni Fitriyanti",
+      "media_showroom": "JKT48_Feni",
+      "media_idn": "jkt48_feni",
+      "media_tiktok": "fenijkt48"
+    },
+    {
+      "nama_panggilan": "Fera",
+      "nama_lengkap": "Afera Thalia",
+      "media_showroom": "",
+      "media_idn": "jkt48_fera",
+      "media_tiktok": "JKT48.U16"
+    },
+    {
+      "nama_panggilan": "Fiony",
+      "nama_lengkap": "Fiony Alveria",
+      "media_showroom": "JKT48_Fiony",
+      "media_idn": "jkt48_fiony",
+      "media_tiktok": "fionyjkt48"
+    },
+    {
+      "nama_panggilan": "Freya",
+      "nama_lengkap": "Freya Jayawardana",
+      "media_showroom": "JKT48_Freya",
+      "media_idn": "jkt48_freya",
+      "media_tiktok": "freyajkt48"
+    },
+    {
+      "nama_panggilan": "Fritzy",
+      "nama_lengkap": "Fritzy Rosmerian",
+      "media_showroom": "JKT48_Fritzy",
+      "media_idn": "jkt48_fritzy",
+      "media_tiktok": "jkt48.fritzy"
+    },
+    {
+      "nama_panggilan": "Giaa",
+      "nama_lengkap": "Hagia Sopia",
+      "media_showroom": "",
+      "media_idn": "jkt48_giaa",
+      "media_tiktok": "jkt48.giaa"
+    },
+    {
+      "nama_panggilan": "Gita",
+      "nama_lengkap": "Gita Sekar Andarini",
+      "media_showroom": "JKT48_Gita",
+      "media_idn": "jkt48_gita",
+      "media_tiktok": "gitajkt48"
+    },
+    {
+      "nama_panggilan": "Gracie",
+      "nama_lengkap": "Grace Octaviani",
+      "media_showroom": "JKT48_Gracie",
+      "media_idn": "jkt48_gracie",
+      "media_tiktok": "graciejkt48"
+    },
+    {
+      "nama_panggilan": "Greesel",
+      "nama_lengkap": "Greesella Adhalia",
+      "media_showroom": "JKT48_Greesel",
+      "media_idn": "jkt48_greesel",
+      "media_tiktok": "greeseljkt48"
+    },
+    {
+      "nama_panggilan": "Heidi",
+      "nama_lengkap": "Heidi Suyangga",
+      "media_showroom": "",
+      "media_idn": "jkt48_heidi",
+      "media_tiktok": "jkt48.heidi__"
+    },
+    {
+      "nama_panggilan": "Indah",
+      "nama_lengkap": "Indah Cahya Nabilla",
+      "media_showroom": "JKT48_Indah",
+      "media_idn": "jkt48_indah",
+      "media_tiktok": "indahjkt48"
+    },
+    {
+      "nama_panggilan": "Intan",
+      "nama_lengkap": "Nur Intan",
+      "media_showroom": "",
+      "media_idn": "jkt48_intan",
+      "media_tiktok": "jkt48.intan"
+    },
+    {
+      "nama_panggilan": "Jazzy",
+      "nama_lengkap": "Putry Jazyta",
+      "media_showroom": "",
+      "media_idn": "jkt48_jazzy",
+      "media_tiktok": "JKT48.U16"
+    },
+    {
+      "nama_panggilan": "Jemima",
+      "nama_lengkap": "Jemima Evodie",
+      "media_showroom": "",
+      "media_idn": "jkt48_jemima",
+      "media_tiktok": "jkt48.jemima"
+    },
+    {
+      "nama_panggilan": "Jessi",
+      "nama_lengkap": "Jessica Chandra",
+      "media_showroom": "JKT48_Jessi",
+      "media_idn": "jkt48_jessi",
+      "media_tiktok": "jessijkt48"
+    },
+    {
+      "nama_panggilan": "JKT48",
+      "nama_lengkap": "JKT48",
+      "media_showroom": "officialJKT48",
+      "media_idn": "jkt48-official",
+      "media_tiktok": "jkt48.official"
+    },
+    {
+      "nama_panggilan": "Kathrina",
+      "nama_lengkap": "Kathrina Irene",
+      "media_showroom": "JKT48_Kathrina",
+      "media_idn": "jkt48_kathrina",
+      "media_tiktok": "kathrinjkt48"
+    },
+    {
+      "nama_panggilan": "Kimmy",
+      "nama_lengkap": "Victoria Kimberly",
+      "media_showroom": "JKT48_Kimmy",
+      "media_idn": "jkt48_kimmy",
+      "media_tiktok": "jkt48.kimmy"
+    },
+    {
+      "nama_panggilan": "Lana",
+      "nama_lengkap": "Aurhel Alana",
+      "media_showroom": "JKT48_Lana",
+      "media_idn": "jkt48_lana",
+      "media_tiktok": "jkt48.lana"
+    },
+    {
+      "nama_panggilan": "Levi",
+      "nama_lengkap": "Michelle Levia",
+      "media_showroom": "JKT48_Levi",
+      "media_idn": "jkt48_levi",
+      "media_tiktok": "jkt48.levi"
+    },
+    {
+      "nama_panggilan": "Lia",
+      "nama_lengkap": "Aurellia",
+      "media_showroom": "JKT48_Lia",
+      "media_idn": "jkt48_lia",
+      "media_tiktok": "jkt48.aurellia_"
+    },
+    {
+      "nama_panggilan": "Lily",
+      "nama_lengkap": "Hillary Abigail",
+      "media_showroom": "JKT48_Lily",
+      "media_idn": "jkt48_lily",
+      "media_tiktok": "jkt48.lily"
+    },
+    {
+      "nama_panggilan": "Lulu",
+      "nama_lengkap": "Lulu Salsabila",
+      "media_showroom": "JKT48_Lulu",
+      "media_idn": "jkt48_lulu",
+      "media_tiktok": ""
+    },
+    {
+      "nama_panggilan": "Lyn",
+      "nama_lengkap": "Jesslyn Elly",
+      "media_showroom": "JKT48_Lyn",
+      "media_idn": "jkt48_lyn",
+      "media_tiktok": "jkt48.lyn.s"
+    },
+    {
+      "nama_panggilan": "Maira",
+      "nama_lengkap": "Humaira Ramadhani",
+      "media_showroom": "",
+      "media_idn": "jkt48_maira",
+      "media_tiktok": "jkt48.maira"
+    },
+    {
+      "nama_panggilan": "Marsha",
+      "nama_lengkap": "Marsha Lenathea",
+      "media_showroom": "JKT48_Marsha",
+      "media_idn": "jkt48_marsha",
+      "media_tiktok": ""
+    },
+    {
+      "nama_panggilan": "Maxine",
+      "nama_lengkap": "Maxine Faye",
+      "media_showroom": "",
+      "media_idn": "jkt48_maxine",
+      "media_tiktok": "JKT48.U16"
+    },
+    {
+      "nama_panggilan": "Michie",
+      "nama_lengkap": "Michelle Alexandra",
+      "media_showroom": "JKT48_Michie",
+      "media_idn": "jkt48_michie",
+      "media_tiktok": "michiejkt48"
+    },
+    {
+      "nama_panggilan": "Mikaela",
+      "nama_lengkap": "Mikaela Kusjanto",
+      "media_showroom": "",
+      "media_idn": "jkt48_mikaela",
+      "media_tiktok": "jkt48.mikaela"
+    },
+    {
+      "nama_panggilan": "Muthe",
+      "nama_lengkap": "Mutiara Azzahra",
+      "media_showroom": "JKT48_Muthe",
+      "media_idn": "jkt48_muthe",
+      "media_tiktok": "muthejkt48"
+    },
+    {
+      "nama_panggilan": "Nachia",
+      "nama_lengkap": "Nina Tutachia",
+      "media_showroom": "JKT48_Nachia",
+      "media_idn": "jkt48_nachia",
+      "media_tiktok": "jkt48.nachia"
+    },
+    {
+      "nama_panggilan": "Nala",
+      "nama_lengkap": "Shabilqis Naila",
+      "media_showroom": "JKT48_Nala",
+      "media_idn": "jkt48_nala",
+      "media_tiktok": "jkt48.nala"
+    },
+    {
+      "nama_panggilan": "Nayla",
+      "nama_lengkap": "Nayla Suji Aurelia",
+      "media_showroom": "JKT48_Nayla",
+      "media_idn": "jkt48_nayla",
+      "media_tiktok": "jkt48.nayla"
+    },
+    {
+      "nama_panggilan": "Oline",
+      "nama_lengkap": "Oline Manuel",
+      "media_showroom": "JKT48_OlineM",
+      "media_idn": "jkt48_oline",
+      "media_tiktok": "jkt48.oline"
+    },
+    {
+      "nama_panggilan": "Olla",
+      "nama_lengkap": "Febriola Sinambela",
+      "media_showroom": "JKT48_Olla",
+      "media_idn": "jkt48_olla",
+      "media_tiktok": "ollajkt48"
+    },
+    {
+      "nama_panggilan": "Oniel",
+      "nama_lengkap": "Cornelia Vanisa",
+      "media_showroom": "JKT48_Oniel",
+      "media_idn": "jkt48_oniel",
+      "media_tiktok": "onieljkt48"
+    },
+    {
+      "nama_panggilan": "Raisha",
+      "nama_lengkap": "Raisha Syifa Wardhana",
+      "media_showroom": "JKT48_Raisha",
+      "media_idn": "jkt48_raisha",
+      "media_tiktok": "jkt48.raisha.s"
+    },
+    {
+      "nama_panggilan": "Ralyne",
+      "nama_lengkap": "Ralyne Van Irwan",
+      "media_showroom": "",
+      "media_idn": "jkt48_ralyne",
+      "media_tiktok": "JKT48.U16"
+    },
+    {
+      "nama_panggilan": "Rara",
+      "nama_lengkap": "Fatimah Azzahra",
+      "media_showroom": "",
+      "media_idn": "jkt48_rara",
+      "media_tiktok": "JKT48.U16"
+    },
+    {
+      "nama_panggilan": "Ribka",
+      "nama_lengkap": "Ribka Budiman",
+      "media_showroom": "JKT48_Ribka",
+      "media_idn": "jkt48_ribka",
+      "media_tiktok": "jkt48.regie"
+    },
+    {
+      "nama_panggilan": "Rilly",
+      "nama_lengkap": "Bong Aprilli",
+      "media_showroom": "",
+      "media_idn": "jkt48_rilly",
+      "media_tiktok": "jkt48.rilly"
+    },
+    {
+      "nama_panggilan": "Sona",
+      "nama_lengkap": "Sona Kalyana",
+      "media_showroom": "",
+      "media_idn": "jkt48_sona",
+      "media_tiktok": "JKT48.U16"
+    },
+    {
+      "nama_panggilan": "Trisha",
+      "nama_lengkap": "Jazzlyn Trisha",
+      "media_showroom": "JKT48_Trisha",
+      "media_idn": "jkt48_trisha",
+      "media_tiktok": "jkt48.trisha"
+    },
+    {
+      "nama_panggilan": "Virgi",
+      "nama_lengkap": "Astrella Virgiananda",
+      "media_showroom": "",
+      "media_idn": "jkt48_virgi",
+      "media_tiktok": "jkt48.virgi"
     }
   ]
 }

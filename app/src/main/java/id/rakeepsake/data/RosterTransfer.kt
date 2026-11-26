@@ -1,8 +1,16 @@
 package id.rakeepsake.data
 
 import id.rakeepsake.net.Http
-import org.json.JSONArray
-import org.json.JSONObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 /**
  * Pengimpor dan pengeksport daftar akun/roster idol.
@@ -10,7 +18,7 @@ import org.json.JSONObject
  */
 object RosterTransfer {
 
-    const val DEFAULT_PRESET_URL = "https://jkt48.preset.id/members.json"
+    const val DEFAULT_PRESET_URL = "https://api.crstlnz.my.id/api/member?group=jkt48"
 
     data class MemberEntry(
         val name: String,
@@ -60,58 +68,94 @@ object RosterTransfer {
      * 2. Format preset.id: {"members": [{"nama": "...", "platform": {"Showroom_user": "...", "IDN_user": "...", "TikTok_user": "..."}}]}
      * 3. Format list akun sederhana: [{"name": "...", "platform": "...", "handle": "..."}]
      */
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true; prettyPrint = true }
+
+    private fun JsonObject.str(key: String, default: String = ""): String =
+        (this[key] as? JsonPrimitive)?.contentOrNull ?: default
+
     fun parseJson(jsonStr: String): List<MemberEntry> {
         val trimmed = jsonStr.trim()
         val list = mutableListOf<MemberEntry>()
 
         try {
-            if (trimmed.startsWith("{")) {
-                val obj = JSONObject(trimmed)
-                if (obj.has("members")) {
-                    val arr = obj.getJSONArray("members")
-                    for (i in 0 until arr.length()) {
-                        val m = arr.getJSONObject(i)
-                        var name = m.optString("nama_panggilan").ifBlank {
-                            m.optString("nama", m.optString("nama_lengkap", "Member ${i + 1}"))
-                        }
-                        val fullName = m.optString("nama_lengkap", name)
+            val parsed = json.parseToJsonElement(trimmed)
+            if (parsed is JsonObject) {
+                val arr = parsed["members"] as? JsonArray ?: return emptyList()
+                for (i in arr.indices) {
+                    val m = arr[i] as? JsonObject ?: continue
+                    val name = m.str("nama_panggilan").ifBlank {
+                        m.str("nama").ifBlank { m.str("nama_lengkap", "Member ${i + 1}") }
+                    }
+                    val fullName = m.str("nama_lengkap", name).ifBlank { name }
 
-                        var sr = m.optString("media_showroom", "").trim()
-                        var idn = m.optString("media_idn", "").trim()
-                        var tt = m.optString("media_tiktok", "").trim()
+                    var sr = m.str("media_showroom").trim()
+                    var idn = m.str("media_idn").trim()
+                    var tt = m.str("media_tiktok").trim()
 
-                        // Periksa nested object "platform" jika ada (format preset.id)
-                        if (m.has("platform")) {
-                            val p = m.optJSONObject("platform")
-                            if (p != null) {
-                                if (sr.isBlank()) sr = p.optString("Showroom_user", p.optString("media_showroom", "")).trim()
-                                if (idn.isBlank()) idn = p.optString("IDN_user", p.optString("media_idn", "")).trim()
-                                if (tt.isBlank()) tt = p.optString("TikTok_user", p.optString("tiktok_user", p.optString("media_tiktok", ""))).trim()
-                            }
-                        }
+                    // Periksa nested object "platform" jika ada
+                    val p = m["platform"] as? JsonObject
+                    if (p != null) {
+                        if (sr.isBlank()) sr = p.str("Showroom_user").ifBlank { p.str("media_showroom") }.trim()
+                        if (idn.isBlank()) idn = p.str("IDN_user").ifBlank { p.str("media_idn") }.trim()
+                        if (tt.isBlank()) tt = p.str("TikTok_user").ifBlank { p.str("tiktok_user").ifBlank { p.str("media_tiktok") } }.trim()
+                    }
 
-                        // Bersihkan URL showroom menjadi key jika formatnya URL
-                        if (sr.contains("/")) sr = sr.substringAfterLast("/").substringAfterLast("=")
-                        if (sr.contains("?")) sr = sr.substringBefore("?")
-                        idn = idn.removePrefix("@")
-                        tt = tt.removePrefix("@")
+                    if (sr.contains("/")) sr = sr.substringAfterLast("/").substringAfterLast("=")
+                    if (sr.contains("?")) sr = sr.substringBefore("?")
+                    idn = idn.removePrefix("@")
+                    tt = tt.removePrefix("@")
 
-                        if (sr.isNotBlank() || idn.isNotBlank() || tt.isNotBlank()) {
-                            list.add(MemberEntry(name, fullName, sr, idn, tt))
-                        }
+                    if (sr.isNotBlank() || idn.isNotBlank() || tt.isNotBlank()) {
+                        list.add(MemberEntry(name, fullName, sr, idn, tt))
                     }
                 }
-            } else if (trimmed.startsWith("[")) {
-                val arr = JSONArray(trimmed)
-                for (i in 0 until arr.length()) {
-                    val item = arr.getJSONObject(i)
-                    val name = item.optString("displayName").ifBlank { item.optString("handle", "Akun ${i + 1}") }
-                    val platform = item.optString("platform", "").uppercase()
-                    val handle = item.optString("handle", "").trim().removePrefix("@")
-                    when (platform) {
-                        "TIKTOK" -> list.add(MemberEntry(name = name, tiktokUser = handle))
-                        "SHOWROOM" -> list.add(MemberEntry(name = name, showroomKey = handle))
-                        "IDN" -> list.add(MemberEntry(name = name, idnUser = handle))
+            } else if (parsed is JsonArray) {
+                for (i in parsed.indices) {
+                    val item = parsed[i] as? JsonObject ?: continue
+                    if (item.containsKey("socials") || item.containsKey("idn_username") || item.containsKey("nicknames")) {
+                        val graduated = (item["is_graduate"] as? JsonPrimitive)?.booleanOrNull ?: false
+                        if (graduated) continue
+                        val fullName = item.str("name").trim()
+                        val nicks = item["nicknames"] as? JsonArray
+                        val nick = (nicks?.firstOrNull() as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+                            ?: fullName.substringBefore(' ').ifBlank { "Member ${i + 1}" }
+                        var idn = item.str("idn_username").trim().removePrefix("@")
+                        var sr = ""
+                        var tt = ""
+                        val socials = item["socials"] as? JsonArray
+                        if (socials != null) {
+                            for (el in socials) {
+                                val s = el as? JsonObject ?: continue
+                                val title = s.str("title").lowercase()
+                                val surl = s.str("url").trim()
+                                when {
+                                    title.contains("tiktok") && tt.isBlank() -> {
+                                        tt = Regex("tiktok\\.com/@([^/?#]+)", RegexOption.IGNORE_CASE)
+                                            .find(surl)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+                                    }
+                                    title.contains("showroom") && sr.isBlank() -> {
+                                        sr = Regex("showroom-live\\.com/(?:r/)?([^/?#]+)", RegexOption.IGNORE_CASE)
+                                            .find(surl)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+                                    }
+                                    title.contains("idn") && idn.isBlank() -> {
+                                        idn = Regex("idn\\.app/([^/?#]+)", RegexOption.IGNORE_CASE)
+                                            .find(surl)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+                                    }
+                                }
+                            }
+                        }
+                        if (sr.isNotBlank() || idn.isNotBlank() || tt.isNotBlank()) {
+                            list.add(MemberEntry(nick, fullName.ifBlank { nick }, sr, idn, tt))
+                        }
+                    } else {
+                        val name = item.str("displayName").ifBlank { item.str("handle", "Akun ${i + 1}") }
+                        val platform = item.str("platform").uppercase()
+                        val handle = item.str("handle").trim().removePrefix("@")
+                        when (platform) {
+                            "TIKTOK" -> list.add(MemberEntry(name = name, tiktokUser = handle))
+                            "SHOWROOM" -> list.add(MemberEntry(name = name, showroomKey = handle))
+                            "IDN" -> list.add(MemberEntry(name = name, idnUser = handle))
+                        }
                     }
                 }
             }
@@ -183,34 +227,35 @@ object RosterTransfer {
      */
     fun exportToJson(accounts: List<Account>): String {
         val grouped = accounts.groupBy { it.displayName.ifBlank { it.handle } }
-        val root = JSONObject()
-        val arr = JSONArray()
-
-        for ((displayName, accs) in grouped) {
-            val m = JSONObject()
-            m.put("nama_panggilan", displayName)
-            m.put("nama_lengkap", displayName)
-            val platformObj = JSONObject()
-            for (a in accs) {
-                when (a.platform.uppercase()) {
-                    "TIKTOK" -> {
-                        m.put("media_tiktok", a.handle)
-                        platformObj.put("TikTok_user", a.handle)
+        val root = buildJsonObject {
+            put(
+                "members",
+                buildJsonArray {
+                    for ((displayName, accs) in grouped) {
+                        add(
+                            buildJsonObject {
+                                put("nama_panggilan", displayName)
+                                put("nama_lengkap", displayName)
+                                val tt = accs.firstOrNull { it.platform.equals("TIKTOK", true) }?.handle
+                                val sr = accs.firstOrNull { it.platform.equals("SHOWROOM", true) }?.handle
+                                val idn = accs.firstOrNull { it.platform.equals("IDN", true) }?.handle
+                                tt?.let { put("media_tiktok", it) }
+                                sr?.let { put("media_showroom", it) }
+                                idn?.let { put("media_idn", it) }
+                                put(
+                                    "platform",
+                                    buildJsonObject {
+                                        tt?.let { put("TikTok_user", it) }
+                                        sr?.let { put("Showroom_user", it) }
+                                        idn?.let { put("IDN_user", it) }
+                                    },
+                                )
+                            },
+                        )
                     }
-                    "SHOWROOM" -> {
-                        m.put("media_showroom", a.handle)
-                        platformObj.put("Showroom_user", a.handle)
-                    }
-                    "IDN" -> {
-                        m.put("media_idn", a.handle)
-                        platformObj.put("IDN_user", a.handle)
-                    }
-                }
-            }
-            m.put("platform", platformObj)
-            arr.put(m)
+                },
+            )
         }
-        root.put("members", arr)
-        return root.toString(2)
+        return json.encodeToString(JsonObject.serializer(), root)
     }
 }
