@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">RaKeepsake</string>
+    <string name="notif_channel_monitor">Pemantau live</string>
+    <string name="notif_channel_monitor_desc">Status pemantauan live berjalan</string>
+    <string name="notif_channel_record">Rekaman</string>
+    <string name="notif_channel_record_desc">Progres dan hasil perekaman live</string>
+    <string name="notif_channel_download">Unduhan</string>
+    <string name="notif_channel_download_desc">Progres dan hasil unduhan postingan</string>
+</resources>

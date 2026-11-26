@@ -1,0 +1,18 @@
+# Gradle & Kotlin build caches
+.gradle/
+.kotlin/
+build/
+app/build/
+
+# Local SDK & keystore signing secrets (DO NOT COMMIT)
+local.properties
+keystore.jks
+keystore.properties
+*.jks
+*.keystore
+
+# IDE & OS temporary files
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
