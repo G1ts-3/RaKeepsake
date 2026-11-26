@@ -1,19 +1,23 @@
 package id.rakeepsake.ui
 
+import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
 import id.rakeepsake.R
 
 /** Token warna dari DESIGN.md & Audit UI/UX (tema gelap hangat, aksen kuning emas "Ra"). */
@@ -146,7 +150,17 @@ private val RaTypography = Typography(
 
 @Composable
 fun RaKeepsakeTheme(content: @Composable () -> Unit) {
-    val colors = if (isSystemInDarkTheme()) DarkRa else LightRa
+    val isDark = isSystemInDarkTheme()
+    val colors = if (isDark) DarkRa else LightRa
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as? Activity)?.window ?: return@SideEffect
+            val controller = WindowCompat.getInsetsController(window, view)
+            controller.isAppearanceLightStatusBars = !isDark
+            controller.isAppearanceLightNavigationBars = !isDark
+        }
+    }
     androidx.compose.runtime.CompositionLocalProvider(LocalRaColors provides colors) {
         MaterialTheme(
             colorScheme = darkColorScheme(
