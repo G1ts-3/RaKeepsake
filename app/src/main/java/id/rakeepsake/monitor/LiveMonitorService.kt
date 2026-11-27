@@ -347,6 +347,7 @@ class LiveMonitorService : LifecycleService() {
                     startedAt = recStartedAt,
                 ),
             )
+            var lastDbProgressAt = 0L
             val recorder = HlsRecorder(
                 quality = settingsSnap?.quality ?: "ASLI",
                 urlProvider = {
@@ -369,8 +370,12 @@ class LiveMonitorService : LifecycleService() {
                         account.id, account.handle, account.platform,
                         recStartedAt, bytes,
                     )
-                    lifecycleScope.launch(Dispatchers.IO) {
-                        container.db.recordings().setSize(recRowId, bytes)
+                    val nowMs = System.currentTimeMillis()
+                    if (nowMs - lastDbProgressAt >= 2000L) {
+                        lastDbProgressAt = nowMs
+                        lifecycleScope.launch(Dispatchers.IO) {
+                            container.db.recordings().setSize(recRowId, bytes)
+                        }
                     }
                 },
             )
@@ -413,35 +418,7 @@ class LiveMonitorService : LifecycleService() {
                 )
                 return
             }
-            var targetFile = file
-            var ext = sniffExt(targetFile)
-            if (ext == "ts") {
-                // Remux MPEG-TS ke MP4 standar tanpa re-encode via MediaExtractor/MediaMuxer
-                val mp4File = File(file.parentFile, file.nameWithoutExtension + ".mp4")
-                val remuxed = TsRemuxer.remuxToMp4(file, mp4File)
-                if (remuxed != null && remuxed.exists() && remuxed.length() > 0L) {
-                    targetFile = remuxed
-                    ext = "mp4"
-                    file.delete()
-                }
-            } else if (ext == "flv") {
-                // Remux FLV siaran TikTok ke MP4 standar tanpa re-encode
-                val mp4File = File(file.parentFile, file.nameWithoutExtension + ".mp4")
-                val remuxed = FlvToMp4Remuxer.remuxToMp4(file, mp4File)
-                if (remuxed != null && remuxed.exists() && remuxed.length() > 0L) {
-                    targetFile = remuxed
-                    ext = "mp4"
-                    file.delete()
-                } else {
-                    // Fallback: normalisasi timestamp FLV jika remux MP4 gagal
-                    val normFlv = File(file.parentFile, file.nameWithoutExtension + "_norm.flv")
-                    val normalized = FlvRemuxer.normalize(file, normFlv)
-                    if (normalized != null && normalized.exists() && normalized.length() > 0L) {
-                        targetFile = normalized
-                        file.delete()
-                    }
-                }
-            }
+            val (targetFile, ext) = remuxRecordingFile(file, sniffExt(file))
             val fileSize = targetFile.length()
             val displayName = Storage.resolveUniqueFileName(
                 context = this,
@@ -485,7 +462,6 @@ class LiveMonitorService : LifecycleService() {
                     settingsSnap?.storageMaxGb ?: 20,
                     settingsSnap?.storageMaxDays ?: 7,
                 )
-                Storage.cleanupTempRaw(this@LiveMonitorService)
             }
         } catch (t: Throwable) {
             lifecycleScope.launch(Dispatchers.IO) {
@@ -499,6 +475,7 @@ class LiveMonitorService : LifecycleService() {
             LiveStateHolder.recording.remove(account.id)
             LiveStateHolder.liveNow.remove(account.id)
             seen.remove("${account.platform}:${account.handle}")
+            Storage.cleanupTempRaw(this@LiveMonitorService, active.values.map { it.file.name }.toSet())
             refreshNotification()
             publishedUri?.let { uri ->
                 lifecycleScope.launch(Dispatchers.IO) {
@@ -522,24 +499,7 @@ class LiveMonitorService : LifecycleService() {
                     if (!file.isFile || file.length() < 100_000L) continue
                     val handle = file.nameWithoutExtension.substringBefore('_')
                     android.util.Log.i("LiveMonitorService", "Memulihkan rekaman yang tersisa: ${file.name} (${file.length()} bytes)")
-                    var targetFile = file
-                    var ext = sniffExt(targetFile)
-                    if (ext == "ts") {
-                        val mp4File = File(file.parentFile, file.nameWithoutExtension + ".mp4")
-                        val remuxed = TsRemuxer.remuxToMp4(file, mp4File)
-                        if (remuxed != null && remuxed.exists() && remuxed.length() > 0L) {
-                            targetFile = remuxed
-                            ext = "mp4"
-                            file.delete()
-                        }
-                    } else if (ext == "flv") {
-                        val normFlv = File(file.parentFile, file.nameWithoutExtension + "_norm.flv")
-                        val normalized = FlvRemuxer.normalize(file, normFlv)
-                        if (normalized != null && normalized.exists() && normalized.length() > 0L) {
-                            targetFile = normalized
-                            file.delete()
-                        }
-                    }
+                    val (targetFile, ext) = remuxRecordingFile(file, sniffExt(file))
                     val fileSize = targetFile.length()
                     val displayName = Storage.resolveUniqueFileName(
                         context = this@LiveMonitorService,
@@ -575,6 +535,31 @@ class LiveMonitorService : LifecycleService() {
                 android.util.Log.w("LiveMonitorService", "Pemulihan rekaman tersisa gagal: ${t.message}")
             }
         }
+    }
+
+    private fun remuxRecordingFile(file: File, initialExt: String): Pair<File, String> {
+        if (initialExt == "ts") {
+            val mp4File = File(file.parentFile, file.nameWithoutExtension + ".mp4")
+            val remuxed = TsRemuxer.remuxToMp4(file, mp4File)
+            if (remuxed != null && remuxed.exists() && remuxed.length() > 0L) {
+                file.delete()
+                return remuxed to "mp4"
+            }
+        } else if (initialExt == "flv") {
+            val mp4File = File(file.parentFile, file.nameWithoutExtension + ".mp4")
+            val remuxed = FlvToMp4Remuxer.remuxToMp4(file, mp4File)
+            if (remuxed != null && remuxed.exists() && remuxed.length() > 0L) {
+                file.delete()
+                return remuxed to "mp4"
+            }
+            val normFlv = File(file.parentFile, file.nameWithoutExtension + "_norm.flv")
+            val normalized = FlvRemuxer.normalize(file, normFlv)
+            if (normalized != null && normalized.exists() && normalized.length() > 0L) {
+                file.delete()
+                return normalized to initialExt
+            }
+        }
+        return file to initialExt
     }
 
     private fun sniffExt(file: File): String = try {

@@ -287,6 +287,8 @@ object Storage {
         val kind: String = "POSTINGAN",
     )
 
+    private val fallbackDurationCache = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     fun queryLibrary(context: Context): List<LibEntry> {
         val out = mutableListOf<LibEntry>()
         val resolver = context.contentResolver
@@ -337,23 +339,31 @@ object Storage {
                 val name = c.getString(c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)) ?: ""
                 val relDir = c.getString(c.getColumnIndexOrThrow(MediaStore.Video.Media.RELATIVE_PATH)) ?: ""
                 val mime = c.getString(c.getColumnIndexOrThrow(MediaStore.Video.Media.MIME_TYPE)) ?: "video/mp4"
+                val size = c.getLong(c.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE))
+                val dateMod = c.getLong(c.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_MODIFIED))
                 var duration = c.getLong(c.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION))
                 if (duration <= 0L && mime.startsWith("video/")) {
-                    duration = runCatching {
-                        val mmr = android.media.MediaMetadataRetriever()
-                        mmr.setDataSource(context, uri)
-                        val dStr = mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
-                        mmr.release()
-                        dStr?.toLongOrNull() ?: 0L
-                    }.getOrDefault(0L)
+                    val durKey = "$uri|$size|$dateMod"
+                    duration = fallbackDurationCache.getOrPut(durKey) {
+                        runCatching {
+                            val mmr = android.media.MediaMetadataRetriever()
+                            try {
+                                mmr.setDataSource(context, uri)
+                                mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
+                                    ?.toLongOrNull() ?: 0L
+                            } finally {
+                                runCatching { mmr.release() }
+                            }
+                        }.getOrDefault(0L)
+                    }
                 }
                 out.add(
                     LibEntry(
                         uri = uri,
                         name = name,
                         relativeDir = relDir,
-                        size = c.getLong(c.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)),
-                        dateModified = c.getLong(c.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_MODIFIED)),
+                        size = size,
+                        dateModified = dateMod,
                         durationMs = duration,
                         mime = mime,
                         kind = detectKind(relDir, name),
@@ -642,14 +652,16 @@ object Storage {
     }
 
     /**
-     * Membersihkan berkas mentah sementara di app-private storage yang berumur > 3 hari.
+     * Membersihkan berkas mentah sementara di app-private storage (berkas kosong atau kedaluwarsa > 3 hari),
+     * sambil selalu melindungi berkas yang masih aktif direkam di [excludeFileNames].
      */
-    fun cleanupTempRaw(context: Context) {
+    fun cleanupTempRaw(context: Context, excludeFileNames: Set<String> = emptySet()) {
         val recDir = File(context.getExternalFilesDir(null), "rec")
         if (!recDir.exists()) return
         val threshold = System.currentTimeMillis() - (3L * 86400L * 1000L)
         recDir.listFiles()?.forEach { file ->
-            if (file.isFile && (file.length() == 0L || file.lastModified() < threshold)) {
+            if (!file.isFile || file.name in excludeFileNames) return@forEach
+            if (file.length() == 0L || file.lastModified() < threshold) {
                 file.delete()
             }
         }

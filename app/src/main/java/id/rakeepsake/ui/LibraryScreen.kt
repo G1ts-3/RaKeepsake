@@ -113,8 +113,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
@@ -1459,6 +1466,7 @@ private suspend fun performPhysicalDelete(
 }
 
 /** Pemutar media layar penuh (Full Screen Media Viewer) di window utama agar safeDrawing insets akurat lintas perangkat. */
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 internal fun FullScreenMediaViewer(
     entry: Storage.LibEntry,
@@ -1473,6 +1481,18 @@ internal fun FullScreenMediaViewer(
     DisposableEffect(uriKey) {
         CloudUploadPlaybackGuard.markPlaying(uriKey)
         onDispose { CloudUploadPlaybackGuard.unmarkPlaying(uriKey) }
+    }
+
+    val openExternal = {
+        runCatching {
+            val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(entry.uri, entry.mime)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(viewIntent, "Buka dengan aplikasi lain"))
+        }.onFailure {
+            Toast.makeText(context, "Tidak dapat membuka aplikasi eksternal", Toast.LENGTH_SHORT).show()
+        }
     }
 
     Box(
@@ -1498,11 +1518,7 @@ internal fun FullScreenMediaViewer(
             }
             entry.mime.startsWith("audio/") -> {
                 val player = remember(entry.uri) {
-                    ExoPlayer.Builder(context).build().apply {
-                        setMediaItem(MediaItem.fromUri(entry.uri))
-                        prepare()
-                        playWhenReady = true
-                    }
+                    buildLocalMediaPlayer(context, entry.uri)
                 }
                 DisposableEffect(player) {
                     onDispose { player.release() }
@@ -1557,19 +1573,33 @@ internal fun FullScreenMediaViewer(
             }
             else -> {
                 val player = remember(entry.uri) {
-                    ExoPlayer.Builder(context).build().apply {
-                        setMediaItem(MediaItem.fromUri(entry.uri))
-                        prepare()
-                        playWhenReady = true
-                    }
+                    buildLocalMediaPlayer(context, entry.uri)
                 }
+                var isBuffering by remember(entry.uri) { mutableStateOf(true) }
+                var playerErrorMsg by remember(entry.uri) { mutableStateOf<String?>(null) }
+
                 DisposableEffect(player) {
-                    onDispose { player.release() }
+                    val listener = object : Player.Listener {
+                        override fun onPlaybackStateChanged(playbackState: Int) {
+                            isBuffering = playbackState == Player.STATE_BUFFERING
+                        }
+
+                        override fun onPlayerError(error: PlaybackException) {
+                            isBuffering = false
+                            playerErrorMsg = error.localizedMessage ?: "Pemutar internal tidak dapat memutar berkas ini."
+                        }
+                    }
+                    player.addListener(listener)
+                    onDispose {
+                        player.removeListener(listener)
+                        player.release()
+                    }
                 }
                 AndroidView(
                     factory = { ctx ->
                         PlayerView(ctx).apply {
                             this.player = player
+                            keepScreenOn = true
                             layoutParams = ViewGroup.LayoutParams(
                                 ViewGroup.LayoutParams.MATCH_PARENT,
                                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1589,6 +1619,61 @@ internal fun FullScreenMediaViewer(
                         .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
                         .padding(bottom = 10.dp),
                 )
+
+                if (isBuffering && playerErrorMsg == null) {
+                    CircularProgressIndicator(
+                        color = Ra.colors.sun,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
+                playerErrorMsg?.let { err ->
+                    Surface(
+                        color = Ra.colors.surfaceAlt.copy(alpha = 0.94f),
+                        shape = RoundedCornerShape(18.dp),
+                        border = BorderStroke(1.dp, Ra.colors.outline),
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(24.dp),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text(
+                                "Video gagal diputar di pemutar internal",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = Ra.colors.text,
+                                textAlign = TextAlign.Center,
+                            )
+                            Text(
+                                err,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Ra.colors.textSecondary,
+                                textAlign = TextAlign.Center,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                OutlinedButton(onClick = {
+                                    playerErrorMsg = null
+                                    isBuffering = true
+                                    player.prepare()
+                                    player.playWhenReady = true
+                                }) {
+                                    Text("Coba lagi", color = Ra.colors.text)
+                                }
+                                Button(
+                                    onClick = { openExternal() },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Ra.colors.sun,
+                                        contentColor = Ra.colors.onSun,
+                                    ),
+                                ) {
+                                    Text("Buka Eksternal")
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -1631,17 +1716,7 @@ internal fun FullScreenMediaViewer(
             }
             Spacer(Modifier.width(8.dp))
             IconButton(
-                onClick = {
-                    runCatching {
-                        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-                            setDataAndType(entry.uri, entry.mime)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        }
-                        context.startActivity(Intent.createChooser(viewIntent, "Buka dengan aplikasi lain"))
-                    }.onFailure {
-                        Toast.makeText(context, "Tidak dapat membuka aplikasi eksternal", Toast.LENGTH_SHORT).show()
-                    }
-                },
+                onClick = { openExternal() },
                 modifier = Modifier.size(48.dp),
             ) {
                 Icon(
@@ -1652,4 +1727,29 @@ internal fun FullScreenMediaViewer(
             }
         }
     }
+}
+
+@androidx.annotation.OptIn(UnstableApi::class)
+private fun buildLocalMediaPlayer(context: Context, uri: Uri): ExoPlayer {
+    // Buffer ringan untuk berkas lokal agar pemutaran & seek video live besar tidak membebani RAM/storage penuh
+    val loadControl = DefaultLoadControl.Builder()
+        .setBufferDurationsMs(2_500, 8_000, 250, 1_000)
+        .setTargetBufferBytes(8 * 1024 * 1024)
+        .setPrioritizeTimeOverSizeThresholds(false)
+        .build()
+    val audioAttrs = AudioAttributes.Builder()
+        .setUsage(C.USAGE_MEDIA)
+        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+        .build()
+    return ExoPlayer.Builder(context)
+        .setLoadControl(loadControl)
+        .build()
+        .apply {
+            setSeekParameters(SeekParameters.CLOSEST_SYNC)
+            setAudioAttributes(audioAttrs, true)
+            setHandleAudioBecomingNoisy(true)
+            setMediaItem(MediaItem.fromUri(uri))
+            prepare()
+            playWhenReady = true
+        }
 }

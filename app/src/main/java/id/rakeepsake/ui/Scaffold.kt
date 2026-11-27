@@ -144,7 +144,7 @@ fun RaScaffold(
                             container = container,
                             modifier = Modifier,
                             snackbarHostState = snackbarHostState,
-                            isActiveTab = active,
+                            isActiveTab = active && mediaViewerPayload == null,
                             onOpenMedia = { entry, title -> mediaViewerPayload = entry to title },
                         )
                     }
@@ -155,7 +155,7 @@ fun RaScaffold(
                         LiveScreen(
                             container = container,
                             modifier = Modifier,
-                            isActiveTab = active,
+                            isActiveTab = active && mediaViewerPayload == null,
                             onNavigateToAccounts = onNavigateToAccounts,
                         )
                     }

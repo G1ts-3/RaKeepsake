@@ -16,8 +16,8 @@ android {
         applicationId = "id.rakeepsake"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.2.4"
+        versionCode = 7
+        versionName = "0.2.5"
         buildConfigField("String", "UPDATE_REPO", "\"G1ts-3/RaKeepsake\"")
     }
 
@@ -100,6 +100,7 @@ dependencies {
 
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.5.1")
+    implementation("androidx.media3:media3-muxer:1.5.1")
     implementation("androidx.media3:media3-ui:1.5.1")
 
     implementation("io.coil-kt:coil-compose:2.7.0")

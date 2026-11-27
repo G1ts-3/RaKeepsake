@@ -1,12 +1,16 @@
 package id.rakeepsake.monitor
 
 import android.media.MediaCodec
-import android.media.MediaFormat
-import android.media.MediaMuxer
 import android.util.Log
-import java.io.BufferedInputStream
+import androidx.annotation.OptIn
+import androidx.media3.common.Format
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.muxer.Mp4Muxer
+import androidx.media3.muxer.Muxer
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.InputStream
 import java.nio.ByteBuffer
 
@@ -14,9 +18,10 @@ import java.nio.ByteBuffer
  * Pengubah format (transmux/remux) berkas FLV (Flash Video) siaran langsung TikTok
  * menjadi berkas MP4 standar tanpa re-encode.
  *
- * Menggunakan MediaMuxer bawaan Android (API 26+) dengan mengekstrak NAL unit H.264
- * dan frame audio AAC dari tag-tag FLV, serta menormalkan PTS agar dimulai dari 00:00.
+ * Menggunakan Media3 Mp4Muxer dengan pelestarian PTS B-frame (via RemuxTimelineNormalizer)
+ * serta pemulihan reset timestamp saat koneksi ulang stream FLV.
  */
+@OptIn(UnstableApi::class)
 object FlvToMp4Remuxer {
     private const val TAG = "FlvToMp4Remuxer"
 
@@ -43,48 +48,43 @@ object FlvToMp4Remuxer {
         dstMp4.parentFile?.mkdirs()
         if (dstMp4.exists()) dstMp4.delete()
 
-        var muxer: MediaMuxer? = null
+        var muxer: Mp4Muxer? = null
+        var fos: FileOutputStream? = null
         return try {
             val headers = scanHeaders(srcFlv) ?: run {
                 Log.w(TAG, "Header video/audio tidak ditemukan pada ${srcFlv.name}")
                 return null
             }
 
-            muxer = MediaMuxer(dstMp4.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            fos = FileOutputStream(dstMp4)
+            muxer = Mp4Muxer.Builder(fos)
+                .setAttemptStreamableOutputEnabled(false)
+                .build()
 
-            // 1. Setup trek video (H.264 / AVC)
-            val videoFormat = MediaFormat.createVideoFormat(
-                MediaFormat.MIMETYPE_VIDEO_AVC,
-                headers.width,
-                headers.height,
-            )
             val spsHdr = byteArrayOf(0, 0, 0, 1) + headers.sps
             val ppsHdr = byteArrayOf(0, 0, 0, 1) + headers.pps
-            videoFormat.setByteBuffer("csd-0", ByteBuffer.wrap(spsHdr))
-            videoFormat.setByteBuffer("csd-1", ByteBuffer.wrap(ppsHdr))
-            val videoTrack = muxer.addTrack(videoFormat)
+            val videoFormat = Format.Builder()
+                .setSampleMimeType(MimeTypes.VIDEO_H264)
+                .setWidth(headers.width)
+                .setHeight(headers.height)
+                .setInitializationData(listOf(spsHdr, ppsHdr))
+                .build()
+            val videoTrack: Muxer.TrackToken = muxer.addTrack(videoFormat)
 
-            // 2. Setup trek audio (AAC) jika tersedia
-            var audioTrack = -1
-            if (headers.asc != null) {
-                val audioFormat = MediaFormat.createAudioFormat(
-                    MediaFormat.MIMETYPE_AUDIO_AAC,
-                    headers.sampleRate,
-                    headers.channels,
-                )
-                audioFormat.setByteBuffer("csd-0", ByteBuffer.wrap(headers.asc))
+            var audioTrack: Muxer.TrackToken? = null
+            if (headers.asc != null && headers.asc.isNotEmpty()) {
+                val audioFormat = Format.Builder()
+                    .setSampleMimeType(MimeTypes.AUDIO_AAC)
+                    .setSampleRate(headers.sampleRate)
+                    .setChannelCount(headers.channels)
+                    .setInitializationData(listOf(headers.asc))
+                    .build()
                 audioTrack = muxer.addTrack(audioFormat)
             }
 
-            muxer.start()
-
-            // 3. Streaming demuxing & remuxing seluruh tag FLV
-            var sampleBuffer = ByteBuffer.allocateDirect(4 * 1024 * 1024) // 4 MB buffer
+            var sampleBuffer = ByteBuffer.allocateDirect(4 * 1024 * 1024)
             val bufferInfo = MediaCodec.BufferInfo()
-
-            var firstPtsUs: Long? = null
-            var lastVideoPtsUs = 0L
-            var lastAudioPtsUs = 0L
+            val normalizer = RemuxTimelineNormalizer()
             var hasSeenKeyframe = false
 
             FileInputStream(srcFlv).buffered(256 * 1024).use { bis ->
@@ -98,12 +98,12 @@ object FlvToMp4Remuxer {
                     if (readFully(bis, tagHdr) != 11) break
                     val tagType = tagHdr[0].toInt() and 0xFF
                     val dataSize = ((tagHdr[1].toInt() and 0xFF) shl 16) or
-                            ((tagHdr[2].toInt() and 0xFF) shl 8) or
-                            (tagHdr[3].toInt() and 0xFF)
-                    val rawTs = ((tagHdr[7].toInt() and 0xFF) shl 24) or
-                            ((tagHdr[4].toInt() and 0xFF) shl 16) or
-                            ((tagHdr[5].toInt() and 0xFF) shl 8) or
-                            (tagHdr[6].toInt() and 0xFF)
+                        ((tagHdr[2].toInt() and 0xFF) shl 8) or
+                        (tagHdr[3].toInt() and 0xFF)
+                    val rawTsMs = ((tagHdr[7].toInt() and 0xFF) shl 24) or
+                        ((tagHdr[4].toInt() and 0xFF) shl 16) or
+                        ((tagHdr[5].toInt() and 0xFF) shl 8) or
+                        (tagHdr[6].toInt() and 0xFF)
 
                     val data = ByteArray(dataSize)
                     if (readFully(bis, data) != dataSize) break
@@ -117,7 +117,7 @@ object FlvToMp4Remuxer {
                         if (codecId == 7 && packetType == 1) { // AVC NALU
                             val isKeyframe = (frameType == 1)
                             if (isKeyframe) hasSeenKeyframe = true
-                            if (!hasSeenKeyframe) continue // Lewati P-frame sebelum IDR pertama
+                            if (!hasSeenKeyframe) continue
 
                             val b2 = data[2].toInt() and 0xFF
                             val b3 = data[3].toInt() and 0xFF
@@ -125,30 +125,19 @@ object FlvToMp4Remuxer {
                             var cts = (b2 shl 16) or (b3 shl 8) or b4
                             if ((cts and 0x800000) != 0) cts -= 0x1000000
 
-                            val calcPtsMs = rawTs + cts
-                            if (firstPtsUs == null) {
-                                firstPtsUs = calcPtsMs * 1000L
-                            }
+                            val rawPtsUs = (rawTsMs.toLong() + cts.toLong()) * 1000L
+                            val ptsUs = normalizer.nextPtsUs(0, rawPtsUs, isVideo = true, stepUs = 40_000L) ?: continue
 
-                            val base = firstPtsUs ?: 0L
-                            var ptsUs = (calcPtsMs * 1000L) - base
-                            if (ptsUs < 0) ptsUs = 0
-                            if (ptsUs <= lastVideoPtsUs) {
-                                ptsUs = lastVideoPtsUs + 1000L
-                            }
-                            lastVideoPtsUs = ptsUs
-
-                            // Konversi AVCC NALUs (4-byte length) menjadi Annex-B (00 00 00 01)
                             if (sampleBuffer.capacity() < data.size + 128) {
                                 sampleBuffer = ByteBuffer.allocateDirect(data.size * 2)
                             }
                             sampleBuffer.clear()
                             var pos = 5
-                            while (pos + 4 < data.size) {
+                            while (pos + 4 <= data.size) {
                                 val nalLen = ((data[pos].toInt() and 0xFF) shl 24) or
-                                        ((data[pos + 1].toInt() and 0xFF) shl 16) or
-                                        ((data[pos + 2].toInt() and 0xFF) shl 8) or
-                                        (data[pos + 3].toInt() and 0xFF)
+                                    ((data[pos + 1].toInt() and 0xFF) shl 16) or
+                                    ((data[pos + 2].toInt() and 0xFF) shl 8) or
+                                    (data[pos + 3].toInt() and 0xFF)
                                 pos += 4
                                 if (nalLen <= 0 || pos + nalLen > data.size) break
 
@@ -162,55 +151,41 @@ object FlvToMp4Remuxer {
 
                             val totalLen = sampleBuffer.position()
                             if (totalLen > 0) {
-                                sampleBuffer.flip()
-                                bufferInfo.offset = 0
-                                bufferInfo.size = totalLen
-                                bufferInfo.presentationTimeUs = ptsUs
-                                bufferInfo.flags = if (isKeyframe) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
+                                sampleBuffer.position(0)
+                                sampleBuffer.limit(totalLen)
+                                bufferInfo.set(0, totalLen, ptsUs, if (isKeyframe) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0)
                                 muxer.writeSampleData(videoTrack, sampleBuffer, bufferInfo)
                             }
                         }
-                    } else if (tagType == 8 && audioTrack != -1 && data.size >= 2) { // Audio
+                    } else if (tagType == 8 && audioTrack != null && data.size >= 2) { // Audio
                         val soundFormat = (data[0].toInt() shr 4) and 0x0F
                         val packetType = data[1].toInt() and 0xFF
 
                         if (soundFormat == 10 && packetType == 1) { // Raw AAC frame
                             val aacLen = data.size - 2
                             if (aacLen > 0 && hasSeenKeyframe) {
-                                val calcPtsMs = rawTs.toLong()
-                                if (firstPtsUs == null) {
-                                    firstPtsUs = calcPtsMs * 1000L
-                                }
+                                val ptsUs = normalizer.nextPtsUs(1, rawTsMs.toLong() * 1000L, isVideo = false, stepUs = 21_333L) ?: continue
 
-                                val base = firstPtsUs ?: 0L
-                                var ptsUs = (calcPtsMs * 1000L) - base
-                                if (ptsUs < 0) ptsUs = 0
-                                if (ptsUs <= lastAudioPtsUs) {
-                                    ptsUs = lastAudioPtsUs + 1000L
+                                if (sampleBuffer.capacity() < aacLen + 64) {
+                                    sampleBuffer = ByteBuffer.allocateDirect(aacLen * 2)
                                 }
-                                lastAudioPtsUs = ptsUs
+                                sampleBuffer.clear()
+                                sampleBuffer.put(data, 2, aacLen)
+                                sampleBuffer.position(0)
+                                sampleBuffer.limit(aacLen)
 
-                            if (sampleBuffer.capacity() < aacLen + 64) {
-                                sampleBuffer = ByteBuffer.allocateDirect(aacLen * 2)
+                                bufferInfo.set(0, aacLen, ptsUs, 0)
+                                muxer.writeSampleData(audioTrack, sampleBuffer, bufferInfo)
                             }
-                            sampleBuffer.clear()
-                            sampleBuffer.put(data, 2, aacLen)
-                            sampleBuffer.flip()
-
-                            bufferInfo.offset = 0
-                            bufferInfo.size = aacLen
-                            bufferInfo.presentationTimeUs = ptsUs
-                            bufferInfo.flags = 0
-                            muxer.writeSampleData(audioTrack, sampleBuffer, bufferInfo)
                         }
                     }
                 }
             }
-        }
 
-            muxer.stop()
-            muxer.release()
+            muxer.close()
             muxer = null
+            fos.close()
+            fos = null
 
             if (dstMp4.exists() && dstMp4.length() > 0L) {
                 Log.i(TAG, "Sukses remux FLV ke MP4: ${dstMp4.name} (${dstMp4.length()} bytes)")
@@ -221,7 +196,8 @@ object FlvToMp4Remuxer {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Gagal remux FLV ke MP4: ${e.message}", e)
-            try { muxer?.release() } catch (_: Exception) {}
+            runCatching { muxer?.close() }
+            runCatching { fos?.close() }
             if (dstMp4.exists()) dstMp4.delete()
             null
         }

@@ -3,17 +3,24 @@ package id.rakeepsake.monitor
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
-import android.media.MediaMuxer
 import android.util.Log
+import androidx.annotation.OptIn
+import androidx.media3.common.Format
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.muxer.Mp4Muxer
+import androidx.media3.muxer.Muxer
 import java.io.File
+import java.io.FileOutputStream
 import java.nio.ByteBuffer
 
 /**
  * Pengubah format (transmux/remux) berkas MPEG-TS menjadi MP4 standar tanpa re-encode.
- * Menggunakan MediaExtractor dan MediaMuxer bawaan Android (API 26+).
- * Mengatasi lonjakan timestamp/PTS antar-segmen HLS agar berkas MP4 mulus dan bisa diputar
- * di seluruh pemutar media (ExoPlayer, Galeri, WhatsApp, Instagram).
+ * Menggunakan MediaExtractor untuk demux dan Media3 Mp4Muxer untuk menulis MP4 dengan dukungan
+ * penuh B-frame (`ctts` v1 + `stts` tersinkron), sehingga mulus di ExoPlayer & decoder perangkat
+ * MediaTek/Samsung/Android lintas versi tanpa macet di `00:00`.
  */
+@OptIn(UnstableApi::class)
 object TsRemuxer {
     private const val TAG = "TsRemuxer"
     private const val BUFFER_SIZE = 1 * 1024 * 1024 // 1 MB buffer per chunk
@@ -29,7 +36,8 @@ object TsRemuxer {
         }
 
         val extractor = MediaExtractor()
-        var muxer: MediaMuxer? = null
+        var muxer: Mp4Muxer? = null
+        var fos: FileOutputStream? = null
 
         try {
             extractor.setDataSource(srcTs.absolutePath)
@@ -42,48 +50,56 @@ object TsRemuxer {
             dstMp4.parentFile?.mkdirs()
             if (dstMp4.exists()) dstMp4.delete()
 
-            muxer = MediaMuxer(dstMp4.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-            val trackMap = HashMap<Int, Int>() // extractorTrackIndex -> muxerTrackIndex
+            fos = FileOutputStream(dstMp4)
+            // Matikan penulisan ulang `moov` berkala setiap 1 detik agar remux rekaman panjang tetap O(N) & ringan di penyimpanan penuh
+            muxer = Mp4Muxer.Builder(fos)
+                .setAttemptStreamableOutputEnabled(false)
+                .build()
+
+            val trackMap = HashMap<Int, Muxer.TrackToken>()
+            val trackIsVideo = HashMap<Int, Boolean>()
+            val trackStepUs = HashMap<Int, Long>()
+            var videoTrackIndex = -1
 
             for (i in 0 until trackCount) {
                 val rawFormat = extractor.getTrackFormat(i)
                 val mime = rawFormat.getString(MediaFormat.KEY_MIME) ?: ""
                 if (mime.startsWith("video/") || mime.startsWith("audio/")) {
-                    val muxFormat = prepareMuxFormat(rawFormat, mime)
+                    val m3Format = buildMedia3Format(rawFormat, mime)
+                    if (m3Format == null) {
+                        Log.w(TAG, "Lewati trek #$i ($mime): CSD/metadata tidak lengkap")
+                        continue
+                    }
                     extractor.selectTrack(i)
-                    val muxerTrack = muxer.addTrack(muxFormat)
-                    trackMap[i] = muxerTrack
-                    Log.d(TAG, "Trek terpilih #$i: $mime -> muxer #$muxerTrack")
+                    val token = muxer.addTrack(m3Format)
+                    trackMap[i] = token
+                    val isVideo = mime.startsWith("video/")
+                    trackIsVideo[i] = isVideo
+                    trackStepUs[i] = if (isVideo) 40_000L else 42_667L
+                    if (isVideo && videoTrackIndex < 0) videoTrackIndex = i
+                    Log.d(TAG, "Trek terpilih #$i: $mime")
                 }
             }
 
             if (trackMap.isEmpty()) {
                 Log.w(TAG, "Tidak ada trek audio/video yang dapat dimux dari ${srcTs.name}")
+                runCatching { muxer.close() }
+                runCatching { fos.close() }
+                dstMp4.delete()
                 return null
             }
 
-            muxer.start()
-            val buffer = ByteBuffer.allocate(BUFFER_SIZE)
+            val buffer = ByteBuffer.allocateDirect(BUFFER_SIZE)
             val bufferInfo = MediaCodec.BufferInfo()
-
-            // Pelacak timestamp per trek: bedakan B-frame reorder vs discontinuity/jeda segmen HLS
-            val firstRawPts = HashMap<Int, Long>()
-            val maxRawPts = HashMap<Int, Long>()
-            val segmentOffsetUs = HashMap<Int, Long>()
-            val lastMuxPts = HashMap<Int, Long>()
-            val trackStepUs = HashMap<Int, Long>()
-            for (i in 0 until trackCount) {
-                val mime = extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME) ?: ""
-                trackStepUs[i] = if (mime.startsWith("audio/")) 42_667L else 40_000L
-            }
-            var globalBaseRawPts: Long? = null
+            val normalizer = RemuxTimelineNormalizer()
+            var seenVideoKeyframe = (videoTrackIndex < 0)
 
             while (true) {
                 val trackIndex = extractor.sampleTrackIndex
                 if (trackIndex < 0) break
 
-                val muxerTrackIndex = trackMap[trackIndex]
-                if (muxerTrackIndex == null) {
+                val token = trackMap[trackIndex]
+                if (token == null) {
                     extractor.advance()
                     continue
                 }
@@ -96,61 +112,43 @@ object TsRemuxer {
                     continue
                 }
 
-                val rawTimeUs = extractor.sampleTime
-                if (rawTimeUs < 0L) {
+                val isVideo = trackIsVideo[trackIndex] == true
+                val rawFlags = extractor.sampleFlags
+                val isKeyframe = (rawFlags and MediaExtractor.SAMPLE_FLAG_SYNC) != 0
+
+                if (isVideo && !seenVideoKeyframe) {
+                    if (!isKeyframe) {
+                        extractor.advance()
+                        continue
+                    }
+                    seenVideoKeyframe = true
+                }
+
+                val stepUs = trackStepUs[trackIndex] ?: 40_000L
+                val adjustedTime = normalizer.nextPtsUs(
+                    trackId = trackIndex,
+                    rawTimeUs = extractor.sampleTime,
+                    isVideo = isVideo,
+                    stepUs = stepUs,
+                )
+                if (adjustedTime == null) {
                     extractor.advance()
                     continue
                 }
 
-                if (globalBaseRawPts == null) {
-                    globalBaseRawPts = rawTimeUs
-                }
-                if (!firstRawPts.containsKey(trackIndex)) {
-                    firstRawPts[trackIndex] = rawTimeUs
-                    maxRawPts[trackIndex] = rawTimeUs
-                    segmentOffsetUs[trackIndex] = (rawTimeUs - (globalBaseRawPts ?: rawTimeUs)).coerceAtLeast(0L)
-                    lastMuxPts[trackIndex] = -1L
-                }
+                buffer.position(0)
+                buffer.limit(sampleSize)
+                val muxFlags = if (isKeyframe) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
+                bufferInfo.set(0, sampleSize, adjustedTime, muxFlags)
 
-                val maxSeenRaw = maxRawPts[trackIndex] ?: rawTimeUs
-                val baseRaw = firstRawPts[trackIndex] ?: rawTimeUs
-                var offset = segmentOffsetUs[trackIndex] ?: 0L
-                val stepUs = trackStepUs[trackIndex] ?: 40_000L
-
-                // Deteksi reset / jeda segmen HLS (> 0.5 detik) agar audio (CBR MP4) & video tidak desinkron
-                val jumpBackUs = maxSeenRaw - rawTimeUs
-                val jumpForwardUs = rawTimeUs - maxSeenRaw
-                if (jumpBackUs > 1_500_000L || jumpForwardUs > 500_000L) {
-                    val prevDuration = (maxSeenRaw - baseRaw).coerceAtLeast(0L)
-                    offset += prevDuration + stepUs
-                    segmentOffsetUs[trackIndex] = offset
-                    firstRawPts[trackIndex] = rawTimeUs
-                    maxRawPts[trackIndex] = rawTimeUs
-                } else if (rawTimeUs > maxSeenRaw) {
-                    maxRawPts[trackIndex] = rawTimeUs
-                }
-
-                val currentBase = firstRawPts[trackIndex] ?: rawTimeUs
-                var adjustedTime = (rawTimeUs - currentBase) + offset
-                val prevMux = lastMuxPts[trackIndex] ?: -1L
-                // Pastikan monotonically non-decreasing untuk kompatibilitas MediaMuxer lintas perangkat
-                if (adjustedTime <= prevMux) {
-                    adjustedTime = prevMux + 1L
-                }
-                lastMuxPts[trackIndex] = adjustedTime
-
-                bufferInfo.offset = 0
-                bufferInfo.size = sampleSize
-                bufferInfo.presentationTimeUs = adjustedTime
-                bufferInfo.flags = extractor.sampleFlags
-
-                muxer.writeSampleData(muxerTrackIndex, buffer, bufferInfo)
+                muxer.writeSampleData(token, buffer, bufferInfo)
                 extractor.advance()
             }
 
-            muxer.stop()
-            muxer.release()
+            muxer.close()
             muxer = null
+            fos.close()
+            fos = null
             extractor.release()
 
             if (dstMp4.exists() && dstMp4.length() > 0L) {
@@ -162,38 +160,72 @@ object TsRemuxer {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Gagal remux ${srcTs.name} ke MP4: ${e.message}", e)
-            try { muxer?.release() } catch (_: Exception) {}
-            try { extractor.release() } catch (_: Exception) {}
+            runCatching { muxer?.close() }
+            runCatching { fos?.close() }
+            runCatching { extractor.release() }
             if (dstMp4.exists()) dstMp4.delete()
             return null
         }
     }
 
-    /**
-     * Memecah gabungan `csd-0` Annex-B (SPS+PPS) milik MPEG-TS extractor menjadi `csd-0` (SPS) dan
-     * `csd-1` (PPS) terpisah untuk H.264/AVC agar `MediaMuxer` tidak gagal `Missing codec specific data`.
-     */
-    private fun prepareMuxFormat(src: MediaFormat, mime: String): MediaFormat {
-        if (mime != MediaFormat.MIMETYPE_VIDEO_AVC) return src
-        if (src.containsKey("csd-1")) return src
-        val csd0Buf = src.getByteBuffer("csd-0") ?: return src
-        val raw = ByteArray(csd0Buf.remaining())
-        csd0Buf.duplicate().get(raw)
-        val (sps, pps) = splitAvcAnnexBCsd(raw)
-        if (sps == null || pps == null) return src
-
-        val w = if (src.containsKey(MediaFormat.KEY_WIDTH)) src.getInteger(MediaFormat.KEY_WIDTH) else return src
-        val h = if (src.containsKey(MediaFormat.KEY_HEIGHT)) src.getInteger(MediaFormat.KEY_HEIGHT) else return src
-        return MediaFormat.createVideoFormat(mime, w, h).apply {
-            setByteBuffer("csd-0", ByteBuffer.wrap(sps))
-            setByteBuffer("csd-1", ByteBuffer.wrap(pps))
-            if (src.containsKey(MediaFormat.KEY_ROTATION)) {
-                setInteger(MediaFormat.KEY_ROTATION, src.getInteger(MediaFormat.KEY_ROTATION))
+    private fun buildMedia3Format(src: MediaFormat, mime: String): Format? {
+        val builder = Format.Builder().setSampleMimeType(mime)
+        return when {
+            mime.startsWith("video/") -> {
+                val w = if (src.containsKey(MediaFormat.KEY_WIDTH)) src.getInteger(MediaFormat.KEY_WIDTH) else return null
+                val h = if (src.containsKey(MediaFormat.KEY_HEIGHT)) src.getInteger(MediaFormat.KEY_HEIGHT) else return null
+                builder.setWidth(w).setHeight(h)
+                if (src.containsKey(MediaFormat.KEY_ROTATION)) {
+                    builder.setRotationDegrees(src.getInteger(MediaFormat.KEY_ROTATION))
+                }
+                val initData = extractVideoInitData(src, mime) ?: return null
+                builder.setInitializationData(initData).build()
             }
-            if (src.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
-                setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, src.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE))
+            mime == MimeTypes.AUDIO_AAC -> {
+                val sr = if (src.containsKey(MediaFormat.KEY_SAMPLE_RATE)) src.getInteger(MediaFormat.KEY_SAMPLE_RATE) else return null
+                val ch = if (src.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) src.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else return null
+                val csd0 = readCsdBytes(src, "csd-0") ?: return null
+                builder
+                    .setSampleRate(sr)
+                    .setChannelCount(ch)
+                    .setInitializationData(listOf(csd0))
+                    .build()
             }
+            else -> null
         }
+    }
+
+    private fun extractVideoInitData(src: MediaFormat, mime: String): List<ByteArray>? {
+        val csd0 = readCsdBytes(src, "csd-0") ?: return null
+        if (mime != MimeTypes.VIDEO_H264) {
+            val csd1 = readCsdBytes(src, "csd-1")
+            return if (csd1 != null) listOf(csd0, csd1) else listOf(csd0)
+        }
+        val csd1 = readCsdBytes(src, "csd-1")
+        if (csd1 != null) {
+            return listOf(ensureAnnexBPrefix(csd0), ensureAnnexBPrefix(csd1))
+        }
+        val (sps, pps) = splitAvcAnnexBCsd(csd0)
+        if (sps == null || pps == null) return null
+        return listOf(sps, pps)
+    }
+
+    private fun ensureAnnexBPrefix(data: ByteArray): ByteArray {
+        if (data.size >= 4 && data[0] == 0.toByte() && data[1] == 0.toByte() &&
+            ((data[2] == 0.toByte() && data[3] == 1.toByte()) || data[2] == 1.toByte())
+        ) {
+            return data
+        }
+        return byteArrayOf(0, 0, 0, 1) + data
+    }
+
+    private fun readCsdBytes(src: MediaFormat, key: String): ByteArray? {
+        if (!src.containsKey(key)) return null
+        val buf = src.getByteBuffer(key) ?: return null
+        val dup = buf.duplicate()
+        val out = ByteArray(dup.remaining())
+        dup.get(out)
+        return out.takeIf { it.isNotEmpty() }
     }
 
     internal fun splitAvcAnnexBCsd(data: ByteArray): Pair<ByteArray?, ByteArray?> {
